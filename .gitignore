@@ -1,0 +1,73 @@
+# ── Build output ─────────────────────────────────────────────
+build/
+build-*/
+build_check/
+*/build/
+cmake-build-*/
+
+# ── Qt / IDE / tooling ───────────────────────────────────────
+*.user
+*.user.*
+CMakeLists.txt.user*
+.qtc_clangd/
+.qtcreator/
+.vscode/
+.idea/
+.claude/
+*.autosave
+*.swp
+
+# ── Internal docs (not for public repo) ──────────────────────
+CLAUDE.md
+accelerometer/claude.md
+ARCHITECTURE.md
+ARCHITECTURE-SEISCOMP.md
+SeisComp-*.md
+ИТОГ-ОБСУЖДЕНИЯ.md
+submission/
+run-all.ps1
+stop-all.ps1
+
+# ── Compiled / binaries ──────────────────────────────────────
+*.o
+*.obj
+*.d
+*.exe
+*.dll
+*.so
+*.a
+*.dylib
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# ── Firmware build artifacts (Keil) ──────────────────────────
+accelerometer/Objects/
+accelerometer/Listings/
+accelerometer/DebugConfig/
+*.axf
+*.map
+*.dep
+*.lnp
+*.build_log.htm
+*.htm
+*.uvguix.*
+*.uvoptx
+*.bak_before_transfer
+*.base@*
+
+# ── Runtime data / archives / db ─────────────────────────────
+*.db
+*.db-wal
+*.db-shm
+terrapulse.db*
+/data/
+/var/
+*.sdf
+*.saf
+*.shf
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
