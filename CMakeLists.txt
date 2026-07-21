@@ -76,6 +76,10 @@ target_link_libraries(tpacq PRIVATE tpbus Qt6::Core Qt6::SerialPort)
 add_executable(tpmon tools/tpmon.cpp)
 target_link_libraries(tpmon PRIVATE tpbus)
 
+# ── tpmm — module monitor (STATUS/SOH live table) ─────────────────────────────
+add_executable(tpmm tools/tpmm.cpp)
+target_link_libraries(tpmm PRIVATE tpbus)
+
 # ── tpproc — processing daemon (raw -> analysis/history -> saf/shf) ────────────
 add_executable(tpproc
     apps/tpproc/main.cpp
@@ -88,6 +92,21 @@ target_link_libraries(tpproc PRIVATE tp_backend tpbus Qt6::Core)
 add_executable(tpstore apps/tpstore/main.cpp)
 target_include_directories(tpstore PRIVATE src)
 target_link_libraries(tpstore PRIVATE tpbus Qt6::Core Qt6::Sql)
+
+# ── tpmaster — central message broker (XSUB/XPUB) + embedded dbstore ──────────
+add_executable(tpmaster apps/tpmaster/main.cpp src/storage/DbStore.cpp)
+target_include_directories(tpmaster PRIVATE src)
+target_link_libraries(tpmaster PRIVATE tpbus Qt6::Core Qt6::Sql)
+
+# ── tpinv — inventory tool (JSON -> INVENTORY notifiers) ──────────────────────
+add_executable(tpinv apps/tpinv/main.cpp)
+target_include_directories(tpinv PRIVATE src third_party/nlohmann)
+target_link_libraries(tpinv PRIVATE tpbus Qt6::Core)
+
+# ── tpjournal — operator journal action (-> JOURNAL group) ────────────────────
+add_executable(tpjournal apps/tpjournal/main.cpp)
+target_include_directories(tpjournal PRIVATE src)
+target_link_libraries(tpjournal PRIVATE tpbus Qt6::Core)
 
 # ── KissFFT ───────────────────────────────────────────────────────────────────
 add_library(kissfft STATIC third_party/kissfft/kiss_fft.c)
@@ -116,6 +135,10 @@ qt_add_executable(appTerraPulse
     src/controllers/AppController.cpp
     src/controllers/BusClient.h
     src/controllers/BusClient.cpp
+    src/controllers/InventoryModel.h
+    src/controllers/InventoryModel.cpp
+    src/controllers/JournalController.h
+    src/controllers/JournalController.cpp
 )
 
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -126,12 +149,21 @@ qt_add_qml_module(appTerraPulse
     QML_FILES
         Main.qml
         qml/Theme.qml
+        qml/components/Panel.qml
+        qml/components/MetricTile.qml
+        qml/components/StatusPill.qml
         qml/components/HealthRing.qml
         qml/components/StatusBadge.qml
         qml/components/NavButton.qml
         qml/components/ObjectCard.qml
+        qml/components/TrendPlot.qml
+        qml/components/TraceView.qml
+        qml/components/SpectrumPlot.qml
+        qml/components/EventReviewPanel.qml
+        qml/components/MapView.qml
         qml/pages/DashboardPage.qml
         qml/pages/MonitoringPage.qml
+        qml/pages/MapPage.qml
         qml/pages/ObjectsPage.qml
         qml/pages/SensorsPage.qml
         qml/pages/AnalysisPage.qml

@@ -9,9 +9,10 @@ zmq::context_t& busContext() {
 
 // ── Publisher ───────────────────────────────────────────────────────────────
 
-Publisher::Publisher(const std::string& endpoint)
+Publisher::Publisher(const std::string& endpoint, bool bind)
     : m_sock(busContext(), zmq::socket_type::pub) {
-    m_sock.bind(endpoint);
+    if (bind) m_sock.bind(endpoint);
+    else      m_sock.connect(endpoint);
 }
 
 void Publisher::publish(const BusMessage& msg) {

@@ -4,57 +4,37 @@ import QtQuick.Controls
 import TerraPulse
 
 Item {
-    id: root
-
-    ListModel { id: sensorModel }
-    property var sensorIndex: ({})
-
-    Connections {
-        target: appController
-        function onSafReceived(saf) {
-            var key = saf.sensorId + "_" + saf.componentName
-            var ts  = new Date(saf.timestamp).toLocaleTimeString(Qt.locale(), "hh:mm:ss")
-            var entry = {
-                senId:       saf.sensorId,
-                objId:       saf.objectId,
-                axis:        saf.componentName,
-                statusText:  saf.warningLevelName,
-                statusColor: saf.warningLevelColor,
-                rms:         saf.rms.toFixed(2),
-                battery:     95,
-                temperature: "23.0",
-                lastSeen:    ts
-            }
-            if (root.sensorIndex.hasOwnProperty(key)) {
-                sensorModel.set(root.sensorIndex[key], entry)
-            } else {
-                root.sensorIndex[key] = sensorModel.count
-                sensorModel.append(entry)
-            }
-        }
-    }
+    function statusText(w)  { return w >= 2 ? "CRITICAL" : w >= 1 ? "WARNING" : "NORMAL" }
+    function statusColor(w) { return w >= 2 ? "#FF1744"  : w >= 1 ? "#FFD600"  : "#00C853" }
 
     ColumnLayout {
         anchors { fill: parent; margins: 24 }
         spacing: 16
 
-        Text {
-            text: "Sensors"
-            color: Theme.textPrimary
-            font.pixelSize: Theme.fontSizeTitle; font.bold: true
+        RowLayout {
+            Layout.fillWidth: true
+            Text {
+                text: "Sensors"
+                color: Theme.textPrimary
+                font.pixelSize: Theme.fontSizeTitle; font.bold: true
+            }
+            Item { Layout.fillWidth: true }
+            Text {
+                text: inventory.sensorCount + " sensors"
+                color: Theme.textSecondary; font.pixelSize: Theme.fontSizeSmall
+            }
         }
 
         Rectangle {
             Layout.fillWidth: true; height: 32
             color: Theme.navBg; radius: Theme.radiusSmall
-            Row {
+            RowLayout {
                 anchors { fill: parent; leftMargin: 12; rightMargin: 12 }
                 Repeater {
-                    model: ["Sensor", "Object", "Axis", "Status", "RMS (mg)", "Battery %", "Temp °C", "Last Seen"]
+                    model: ["Object", "Sensor", "Model", "Location", "Health", "Status", "RMS", "Freq Hz", "Last Seen"]
                     Text {
-                        width: parent.width / 8; height: parent.height
-                        text: modelData; verticalAlignment: Text.AlignVCenter
-                        color: Theme.textSecondary
+                        Layout.fillWidth: true
+                        text: modelData; color: Theme.textSecondary
                         font.pixelSize: Theme.fontSizeSmall; font.bold: true
                     }
                 }
@@ -63,44 +43,55 @@ Item {
 
         ListView {
             Layout.fillWidth: true; Layout.fillHeight: true
-            model: sensorModel; clip: true; spacing: 2
+            model: inventory.sensors; clip: true; spacing: 2
 
             delegate: Rectangle {
                 width: ListView.view.width; height: 36
                 color: index % 2 === 0 ? Theme.surface : Theme.surfaceAlt
                 radius: Theme.radiusSmall
-
-                Row {
+                RowLayout {
                     anchors { fill: parent; leftMargin: 12; rightMargin: 12 }
-
                     Repeater {
-                        model: [senId, objId, axis]
+                        model: [
+                            String(modelData.objectId),
+                            String(modelData.sensorId),
+                            modelData.model !== undefined ? modelData.model : "—",
+                            modelData.location !== undefined ? modelData.location : "—",
+                            modelData.hasData ? Math.round(modelData.health * 100) + "%" : "—"
+                        ]
                         Text {
-                            width: parent.width / 8; height: parent.height
-                            text: modelData; verticalAlignment: Text.AlignVCenter
-                            color: Theme.textPrimary; font.pixelSize: Theme.fontSizeSmall
+                            Layout.fillWidth: true
+                            text: modelData; color: Theme.textPrimary
+                            font.pixelSize: Theme.fontSizeSmall; elide: Text.ElideRight
                         }
                     }
-
-                    // Status cell with color
                     Text {
-                        width: parent.width / 8; height: parent.height
-                        text: statusText; verticalAlignment: Text.AlignVCenter
-                        color: statusColor; font.pixelSize: Theme.fontSizeSmall; font.bold: true
+                        Layout.fillWidth: true
+                        text: modelData.hasData ? statusText(modelData.warning) : "—"
+                        color: modelData.hasData ? statusColor(modelData.warning) : Theme.textSecondary
+                        font.pixelSize: Theme.fontSizeSmall; font.bold: true
                     }
-
                     Repeater {
-                        model: [rms, battery + "%", temperature + " °C", lastSeen]
+                        model: [
+                            modelData.hasData ? Number(modelData.rms).toFixed(2) : "—",
+                            modelData.hasData ? Number(modelData.dominantFrequency).toFixed(1) : "—",
+                            modelData.lastSeen !== undefined ? modelData.lastSeen : "—"
+                        ]
                         Text {
-                            width: parent.width / 8; height: parent.height
-                            text: modelData; verticalAlignment: Text.AlignVCenter
-                            color: Theme.textPrimary; font.pixelSize: Theme.fontSizeSmall
+                            Layout.fillWidth: true
+                            text: modelData; color: Theme.textPrimary
+                            font.pixelSize: Theme.fontSizeSmall
                         }
                     }
                 }
             }
-
             ScrollBar.vertical: ScrollBar {}
+        }
+
+        Text {
+            visible: inventory.sensorCount === 0
+            text: "No sensors in inventory. Load it with:  tpinv --file config/inventory.example.json"
+            color: Theme.textSecondary; font.pixelSize: Theme.fontSizeSmall
         }
     }
 }

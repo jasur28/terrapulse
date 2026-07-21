@@ -3,12 +3,12 @@ import QtQuick
 
 QtObject {
     // Backgrounds
-    readonly property color background:  "#1A1A2E"
-    readonly property color surface:     "#16213E"
-    readonly property color surfaceAlt:  "#1A2240"
-    readonly property color navBg:       "#0D1117"
-    readonly property color accent:      "#0F3460"
-    readonly property color border:      "#2A2A4A"
+    readonly property color background:  "#151820"
+    readonly property color surface:     "#1D222C"
+    readonly property color surfaceAlt:  "#242B36"
+    readonly property color navBg:       "#0F131A"
+    readonly property color accent:      "#14324A"
+    readonly property color border:      "#343C48"
 
     // Text
     readonly property color textPrimary:   "#E0E0E0"

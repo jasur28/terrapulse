@@ -4,21 +4,25 @@ import TerraPulse
 
 Window {
     id: root
-    width: 1280; height: 760
-    minimumWidth: 960; minimumHeight: 600
+
+    width: 1280
+    height: 760
+    minimumWidth: 960
+    minimumHeight: 600
     visible: true
-    title: "TerraPulse — Structural Health Monitor"
+    title: "TerraPulse - Structural Health Monitor"
+           + (sessionQueue === "playback" ? "   PLAYBACK REVIEW (tpolv)" : "")
     color: Theme.background
 
-    // ── Navigation labels + page mapping ────────────────────────────────────
     readonly property var navItems: [
-        { label: "Dashboard",  icon: "⬡" },
-        { label: "Monitoring", icon: "📈" },
-        { label: "Objects",    icon: "🏗" },
-        { label: "Sensors",    icon: "📡" },
-        { label: "Analysis",   icon: "🔬" },
-        { label: "Events",     icon: "⚠" },
-        { label: "Settings",   icon: "⚙" }
+        { label: "Dashboard",  icon: "D" },
+        { label: "Monitoring", icon: "R" },
+        { label: "Map",        icon: "M" },
+        { label: "Objects",    icon: "O" },
+        { label: "Sensors",    icon: "S" },
+        { label: "Analysis",   icon: "A" },
+        { label: "Events",     icon: "E" },
+        { label: "Settings",   icon: "C" }
     ]
     property int currentPage: 0
 
@@ -26,31 +30,38 @@ Window {
         anchors.fill: parent
         spacing: 0
 
-        // ── Sidebar ─────────────────────────────────────────────────────────
         Rectangle {
-            width: Theme.navWidth
+            Layout.preferredWidth: Theme.navWidth
             Layout.fillHeight: true
             color: Theme.navBg
 
-            // Right border
             Rectangle {
-                anchors { right: parent.right; top: parent.top; bottom: parent.bottom }
-                width: 1; color: Theme.border
+                anchors {
+                    right: parent.right
+                    top: parent.top
+                    bottom: parent.bottom
+                }
+                width: 1
+                color: Theme.border
             }
 
             ColumnLayout {
                 anchors.fill: parent
                 spacing: 0
 
-                // Logo
                 Rectangle {
                     Layout.fillWidth: true
-                    height: 56
+                    Layout.preferredHeight: 56
                     color: "transparent"
 
                     Rectangle {
-                        anchors { bottom: parent.bottom; left: parent.left; right: parent.right }
-                        height: 1; color: Theme.border
+                        anchors {
+                            bottom: parent.bottom
+                            left: parent.left
+                            right: parent.right
+                        }
+                        height: 1
+                        color: Theme.border
                     }
 
                     Text {
@@ -59,42 +70,53 @@ Window {
                         color: Theme.colorService
                         font.pixelSize: 16
                         font.bold: true
-                        font.letterSpacing: 1.2
                     }
                 }
 
-                // Nav buttons
                 Repeater {
                     model: root.navItems
+
                     NavButton {
                         Layout.fillWidth: true
-                        label:    modelData.label
+                        label: modelData.label
                         iconChar: modelData.icon
-                        active:   root.currentPage === index
+                        active: root.currentPage === index
                         onClicked: root.currentPage = index
                     }
                 }
 
                 Item { Layout.fillHeight: true }
 
-                // Status indicator
                 Rectangle {
                     Layout.fillWidth: true
-                    height: 48
+                    Layout.preferredHeight: 48
                     color: "transparent"
 
                     Rectangle {
-                        anchors { top: parent.top; left: parent.left; right: parent.right }
-                        height: 1; color: Theme.border
+                        anchors {
+                            top: parent.top
+                            left: parent.left
+                            right: parent.right
+                        }
+                        height: 1
+                        color: Theme.border
                     }
 
                     Row {
-                        anchors { left: parent.left; leftMargin: 16; verticalCenter: parent.verticalCenter }
+                        anchors {
+                            left: parent.left
+                            leftMargin: 16
+                            verticalCenter: parent.verticalCenter
+                        }
                         spacing: 8
+
                         Rectangle {
-                            width: 8; height: 8; radius: 4
+                            width: 8
+                            height: 8
+                            radius: 4
                             color: acq.connected ? Theme.colorNormal : Theme.colorOffline
                         }
+
                         Text {
                             text: acq.connected ? "Live" : "Offline"
                             color: Theme.textSecondary
@@ -105,20 +127,19 @@ Window {
             }
         }
 
-        // ── Page content area ────────────────────────────────────────────────
         StackLayout {
-            id: pageStack
             Layout.fillWidth: true
             Layout.fillHeight: true
             currentIndex: root.currentPage
 
-            DashboardPage  {}
+            DashboardPage {}
             MonitoringPage {}
-            ObjectsPage    {}
-            SensorsPage    {}
-            AnalysisPage   {}
-            EventsPage     {}
-            SettingsPage   {}
+            MapPage {}
+            ObjectsPage {}
+            SensorsPage {}
+            AnalysisPage {}
+            EventsPage {}
+            SettingsPage {}
         }
     }
 }

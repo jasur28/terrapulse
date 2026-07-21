@@ -4,9 +4,12 @@
 // No GUI. (Raw/SDF binary archival can be added later.)
 
 #include "bus/Bus.h"
+#include "bus/Soh.h"
+#include "bus/Master.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
+#include <QDateTime>
 #include <QTimer>
 #include <QtSql/QSqlDatabase>
 #include <QtSql/QSqlQuery>
@@ -59,9 +62,9 @@ int main(int argc, char* argv[]) {
     QCommandLineParser parser;
     parser.setApplicationDescription("TerraPulse storage daemon");
     parser.addHelpOption();
-    QCommandLineOption subOpt({"s", "sub"}, "Results (SUB) endpoint", "endpoint", "tcp://127.0.0.1:5557");
+    QCommandLineOption masterOpt({"m", "master"}, "tpmaster host (saf/shf <- <host>:5562, SOH -> <host>:5561)", "host", "127.0.0.1");
     QCommandLineOption dbOpt ({"d", "db"},  "SQLite database path",   "path",     "terrapulse.db");
-    parser.addOptions({subOpt, dbOpt});
+    parser.addOptions({masterOpt, dbOpt});
     parser.process(app);
 
     QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE");
@@ -88,9 +91,15 @@ int main(int argc, char* argv[]) {
         "status,t_start_ms,t_end_ms,duration_s,max_value,growth_rate,trend,confidence) "
         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
 
-    tp::Subscriber sub(parser.value(subOpt).toStdString());
+    const std::string host = parser.value(masterOpt).toStdString();
+    tp::Subscriber sub(tp::master::out(host));   // results from broker XPUB
     sub.subscribe("saf.");
     sub.subscribe("shf.");
+
+    // STATUS heartbeat -> tpmaster/tpmm (tpstore only subscribes for data, so it
+    // opens a small connect-mode publisher just for SOH on the broker XSUB).
+    tp::Publisher  sohPub(tp::master::in(host), /*bind=*/false);
+    const qint64   startMs = QDateTime::currentMSecsSinceEpoch();
 
     quint64 safRows = 0, eventRows = 0;
 
@@ -152,6 +161,15 @@ int main(int argc, char* argv[]) {
     });
     pollTimer.start(50);
 
+    QTimer heartbeat;
+    QObject::connect(&heartbeat, &QTimer::timeout, [&]() {
+        QVariantMap c;
+        c["saf_rows"] = static_cast<qulonglong>(safRows);
+        c["events"]   = static_cast<qulonglong>(eventRows);
+        sohPub.publish(tp::sohMessage("tpstore", startMs, c));
+    });
+    heartbeat.start(2000);
+
     QTimer stats;
     QObject::connect(&stats, &QTimer::timeout, [&]() {
         std::printf("[tpstore] saf_rows=%llu events=%llu  db=%s\n",
@@ -163,7 +181,7 @@ int main(int argc, char* argv[]) {
     stats.start(2000);
 
     std::printf("[tpstore] saf/shf <- %s   db=%s\n",
-                parser.value(subOpt).toUtf8().constData(),
+                tp::master::out(host).c_str(),
                 parser.value(dbOpt).toUtf8().constData());
     std::fflush(stdout);
 

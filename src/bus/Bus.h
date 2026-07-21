@@ -9,10 +9,12 @@ namespace tp {
 // Process-wide shared ZeroMQ context.
 zmq::context_t& busContext();
 
-// PUB socket — binds an endpoint, fans out messages to all subscribers.
+// PUB socket — fans out messages to all subscribers.
+//   bind=true  (default): binds the endpoint (v2 mesh, direct peers).
+//   bind=false          : connects to a broker's XSUB frontend (tpmaster).
 class Publisher {
 public:
-    explicit Publisher(const std::string& endpoint);
+    explicit Publisher(const std::string& endpoint, bool bind = true);
     void publish(const BusMessage& msg);
 
 private:

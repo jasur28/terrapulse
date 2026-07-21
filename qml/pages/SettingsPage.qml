@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls
 import TerraPulse
 
 Item {
@@ -12,6 +13,73 @@ Item {
             color: Theme.textPrimary
             font.pixelSize: Theme.fontSizeTitle
             font.bold: true
+        }
+
+        // Operator identity + session
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 16
+
+            Rectangle {
+                Layout.fillWidth: true
+                color: Theme.surface; radius: Theme.radius
+                border.color: Theme.border; border.width: 1
+                implicitHeight: opCol.implicitHeight + 32
+                Column {
+                    id: opCol
+                    anchors { fill: parent; margins: 16 }
+                    spacing: 10
+                    Text { text: "Operator"; color: Theme.textSecondary; font.pixelSize: Theme.fontSizeNormal; font.bold: true }
+                    Text {
+                        text: "Signs journal actions (confirm / reject) on the Events page."
+                        color: Theme.textSecondary; font.pixelSize: Theme.fontSizeSmall
+                        wrapMode: Text.WordWrap; width: parent.width - 8
+                    }
+                    TextField {
+                        width: 220
+                        text: journalController.operatorName
+                        placeholderText: "operator name"
+                        onEditingFinished: journalController.operatorName = text
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                color: Theme.surface; radius: Theme.radius
+                border.color: Theme.border; border.width: 1
+                implicitHeight: sesCol.implicitHeight + 32
+                Column {
+                    id: sesCol
+                    anchors { fill: parent; margins: 16 }
+                    spacing: 8
+                    Text { text: "Session"; color: Theme.textSecondary; font.pixelSize: Theme.fontSizeNormal; font.bold: true }
+                    Row {
+                        spacing: 8
+                        Text { text: "Queue:"; color: Theme.textSecondary; font.pixelSize: Theme.fontSizeSmall }
+                        Text {
+                            text: sessionQueue.toUpperCase()
+                            color: sessionQueue === "playback" ? Theme.colorWarning : Theme.colorNormal
+                            font.pixelSize: Theme.fontSizeSmall; font.bold: true
+                        }
+                    }
+                    Text {
+                        text: sessionQueue === "playback" ? "Offline review (tpolv) — isolated from live." : "Live monitoring."
+                        color: Theme.textSecondary; font.pixelSize: Theme.fontSizeSmall
+                    }
+                    Row {
+                        spacing: 8
+                        Text { text: "Acquisition:"; color: Theme.textSecondary; font.pixelSize: Theme.fontSizeSmall }
+                        Text { text: acq.endpoint; color: Theme.textPrimary; font.pixelSize: Theme.fontSizeSmall }
+                    }
+                    Row {
+                        spacing: 8
+                        Text { text: "Objects:"; color: Theme.textSecondary; font.pixelSize: Theme.fontSizeSmall }
+                        Text { text: inventory.structureCount + " · Sensors: " + inventory.sensorCount
+                               color: Theme.textPrimary; font.pixelSize: Theme.fontSizeSmall }
+                    }
+                }
+            }
         }
 
         // Analysis window size

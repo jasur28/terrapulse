@@ -1,6 +1,6 @@
 // tpmon — bus debug monitor. Subscribes to a topic prefix and prints messages.
 // Usage: tpmon [endpoint] [prefix]
-//   tpmon tcp://127.0.0.1:5556 raw.
+//   tpmon tcp://127.0.0.1:5562 raw.   (default endpoint = tpmaster output)
 
 #include "bus/Bus.h"
 #include <QVariantMap>
@@ -8,7 +8,7 @@
 #include <string>
 
 int main(int argc, char* argv[]) {
-    const std::string endpoint = argc > 1 ? argv[1] : "tcp://127.0.0.1:5556";
+    const std::string endpoint = argc > 1 ? argv[1] : "tcp://127.0.0.1:5562";
     const std::string prefix   = argc > 2 ? argv[2] : "";
 
     tp::Subscriber sub(endpoint);

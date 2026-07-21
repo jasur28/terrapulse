@@ -5,9 +5,12 @@
 
 #include "proc/ProcPipeline.h"
 #include "bus/Bus.h"
+#include "bus/Soh.h"
+#include "bus/Master.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
+#include <QDateTime>
 #include <QTimer>
 #include <cstdio>
 #include <string>
@@ -29,16 +32,18 @@ int main(int argc, char* argv[]) {
     QCommandLineParser parser;
     parser.setApplicationDescription("TerraPulse processing daemon");
     parser.addHelpOption();
-    QCommandLineOption subOpt({"s", "sub"}, "Raw input (SUB) endpoint", "endpoint", "tcp://127.0.0.1:5556");
-    QCommandLineOption pubOpt({"b", "pub"}, "Result (PUB) endpoint",    "endpoint", "tcp://127.0.0.1:5557");
+    QCommandLineOption masterOpt({"m", "master"}, "tpmaster host", "host", "127.0.0.1");
+    QCommandLineOption queueOpt("queue", "Queue: production | playback", "name", "production");
     QCommandLineOption winOpt("window", "Samples per analysis window", "n", "100");
-    parser.addOptions({subOpt, pubOpt, winOpt});
+    parser.addOptions({masterOpt, queueOpt, winOpt});
     parser.process(app);
 
-    const std::string subEndpoint = parser.value(subOpt).toStdString();
-    const std::string pubEndpoint = parser.value(pubOpt).toStdString();
+    const std::string host        = parser.value(masterOpt).toStdString();
+    const auto        queue       = tp::master::queueFromName(parser.value(queueOpt).toStdString());
+    const std::string subEndpoint = tp::master::out(host, queue);  // raw from broker XPUB
+    const std::string pubEndpoint = tp::master::in(host, queue);   // saf/shf to broker XSUB
 
-    tp::Publisher  pub(pubEndpoint);
+    tp::Publisher  pub(pubEndpoint, /*bind=*/false);         // publish through the broker
     tp::Subscriber sub(subEndpoint);
     sub.subscribe("raw.");
 
@@ -80,6 +85,19 @@ int main(int argc, char* argv[]) {
         }
     });
     pollTimer.start(5);
+
+    // STATUS heartbeat -> tpmaster/tpmm.
+    const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
+    QTimer heartbeat;
+    QObject::connect(&heartbeat, &QTimer::timeout, [&]() {
+        QVariantMap c;
+        c["rawIn"]   = static_cast<qulonglong>(rawIn);
+        c["windows"] = pipe.windowsProcessed();
+        c["saf"]     = static_cast<qulonglong>(safOut);
+        c["shf"]     = static_cast<qulonglong>(shfOut);
+        pub.publish(tp::sohMessage("tpproc", startMs, c));
+    });
+    heartbeat.start(2000);
 
     QTimer stats;
     QObject::connect(&stats, &QTimer::timeout, [&]() {

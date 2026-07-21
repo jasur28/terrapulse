@@ -24,6 +24,7 @@ ARCHITECTURE.md
 ARCHITECTURE-SEISCOMP.md
 SeisComp-*.md
 ИТОГ-ОБСУЖДЕНИЯ.md
+tpmaster-ПЛАН.md
 submission/
 run-all.ps1
 stop-all.ps1
@@ -66,6 +67,10 @@ terrapulse.db*
 *.sdf
 *.saf
 *.shf
+
+# ── External map tiles (SeisComp/Natural Earth assets) ───────
+# Not ours to redistribute + hundreds of binary PNGs. Dropped in locally.
+share/maps/
 
 # ── OS ───────────────────────────────────────────────────────
 .DS_Store

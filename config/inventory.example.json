@@ -1,0 +1,52 @@
+{
+  "structures": [
+    {
+      "objectId": 1,
+      "name": "Bridge-1",
+      "lat": 41.311,
+      "lon": 69.279,
+      "description": "Highway bridge, main span",
+      "sensors": [
+        {
+          "sensorId": 1,
+          "model": "CA-01NP",
+          "location": "pier-2 deck",
+          "channels": [
+            { "component": 0, "sampleRate": 200, "unit": "gal", "gain": 1.0 },
+            { "component": 1, "sampleRate": 200, "unit": "gal", "gain": 1.0 },
+            { "component": 2, "sampleRate": 200, "unit": "gal", "gain": 1.0 }
+          ]
+        },
+        {
+          "sensorId": 2,
+          "model": "CA-01NP",
+          "location": "mid-span",
+          "channels": [
+            { "component": 0, "sampleRate": 200, "unit": "gal", "gain": 1.0 },
+            { "component": 1, "sampleRate": 200, "unit": "gal", "gain": 1.0 },
+            { "component": 2, "sampleRate": 200, "unit": "gal", "gain": 1.0 }
+          ]
+        }
+      ]
+    },
+    {
+      "objectId": 2,
+      "name": "Tower-A",
+      "lat": 41.299,
+      "lon": 69.240,
+      "description": "High-rise residential tower",
+      "sensors": [
+        {
+          "sensorId": 1,
+          "model": "CA-01NP",
+          "location": "roof",
+          "channels": [
+            { "component": 0, "sampleRate": 200, "unit": "gal", "gain": 1.0 },
+            { "component": 1, "sampleRate": 200, "unit": "gal", "gain": 1.0 },
+            { "component": 2, "sampleRate": 200, "unit": "gal", "gain": 1.0 }
+          ]
+        }
+      ]
+    }
+  ]
+}

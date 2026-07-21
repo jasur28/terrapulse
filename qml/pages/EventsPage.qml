@@ -1,124 +1,323 @@
 import QtQuick
-import QtQuick.Layouts
 import QtQuick.Controls
+import QtQuick.Layouts
 import TerraPulse
 
 Item {
     id: root
 
     ListModel { id: eventsModel }
+    property var evIndex: ({})       // shfId -> row index (for list updates)
+    property var reviewById: ({})    // shfId -> review status (survives model churn)
+    property int selId: -1
+    property var selData: null       // decoupled copy of the selected event
+
+    function reviewText(r) {
+        return r === 1 ? "CONFIRMED" : r === 2 ? "REJECTED" : "AUTO"
+    }
+
+    function reviewColor(r) {
+        return r === 1 ? Theme.colorNormal : r === 2 ? Theme.colorCritical : Theme.textSecondary
+    }
+
+    // The detail panel reads this copy, never the churning model — a rapid
+    // insert/remove can't invalidate an index mid-binding (that segfaulted get()).
+    function selectedEvent() { return root.selData }
+
+    function makeRow(shf) {
+        var id = shf.shfId
+        return {
+            shfId: id,
+            evTime: new Date(shf.anomalyStartTime).toLocaleTimeString(Qt.locale(), "hh:mm:ss"),
+            objId: shf.objectId,
+            senId: shf.sensorId,
+            evType: shf.anomalyTypeName,
+            severity: shf.severityName,
+            sevColor: shf.severityColor,
+            evStatus: shf.statusName,
+            durText: shf.anomalyDuration > 0 ? shf.anomalyDuration + " s" : "ongoing",
+            conf: Math.round((shf.confidenceLevel || 0) * 100) + "%",
+            review: root.reviewById.hasOwnProperty(id) ? root.reviewById[id] : 0
+        }
+    }
+
+    function sendReview(action) {
+        if (root.selId < 0) return
+        journalController.sendAction(root.selId, action)
+    }
 
     Connections {
         target: appController
         function onShfReceived(shf) {
-            var ts = new Date(shf.anomalyStartTime).toLocaleTimeString(Qt.locale(), "hh:mm:ss")
-            eventsModel.insert(0, {
-                evTime:    ts,
-                objId:     shf.objectId,
-                senId:     shf.sensorId,
-                axis:      shf.componentName,
-                evType:    shf.anomalyTypeName,
-                severity:  shf.severityName,
-                sevColor:  shf.severityColor,
-                duration:  shf.anomalyDuration > 0 ? shf.anomalyDuration + " s" : "ongoing",
-                evStatus:  shf.statusName
-            })
-            if (eventsModel.count > 500) eventsModel.remove(eventsModel.count - 1)
+            var id = shf.shfId
+            var row = root.makeRow(shf)
+
+            if (root.evIndex.hasOwnProperty(id) && root.evIndex[id] < eventsModel.count) {
+                eventsModel.set(root.evIndex[id], row)
+            } else {
+                eventsModel.insert(0, row)
+                if (eventsModel.count > 500) eventsModel.remove(eventsModel.count - 1)
+                root.evIndex = ({})
+                for (var k = 0; k < eventsModel.count; ++k)
+                    root.evIndex[eventsModel.get(k).shfId] = k
+                if (root.selId < 0) root.selId = id
+            }
+
+            if (id === root.selId) root.selData = row   // keep the detail copy fresh
         }
     }
 
-    readonly property var colHeaders: ["Time", "Object", "Sensor", "Axis", "Type", "Severity", "Duration", "Status"]
+    Connections {
+        target: journalController
+        function onJournalReceived(eventId, action, op) {
+            var r = action === "confirm" ? 1 : action === "reject" ? 2 : -1
+            if (r < 0) return
+            root.reviewById[eventId] = r
+            if (root.evIndex.hasOwnProperty(eventId)) {
+                var i = root.evIndex[eventId]
+                if (i >= 0 && i < eventsModel.count) eventsModel.setProperty(i, "review", r)
+            }
+            if (eventId === root.selId && root.selData) {
+                var d = {}
+                for (var key in root.selData) d[key] = root.selData[key]
+                d.review = r
+                root.selData = d
+            }
+        }
+    }
 
     ColumnLayout {
-        anchors { fill: parent; margins: 24 }
-        spacing: 16
+        anchors {
+            fill: parent
+            margins: 20
+        }
+        spacing: 12
 
         RowLayout {
-            Text {
-                text: "Event Log"
-                color: Theme.textPrimary
-                font.pixelSize: Theme.fontSizeTitle; font.bold: true
-            }
-            Item { Layout.fillWidth: true }
-            Text {
-                text: eventsModel.count + " events"
-                color: Theme.textSecondary; font.pixelSize: Theme.fontSizeSmall
-            }
-        }
+            Layout.fillWidth: true
 
-        // Header row
-        Rectangle {
-            Layout.fillWidth: true; height: 32
-            color: Theme.navBg; radius: Theme.radiusSmall
-            Row {
-                anchors { fill: parent; leftMargin: 12; rightMargin: 12 }
-                Repeater {
-                    model: root.colHeaders
-                    Text {
-                        width: parent.width / root.colHeaders.length; height: parent.height
-                        text: modelData; verticalAlignment: Text.AlignVCenter
-                        color: Theme.textSecondary
-                        font.pixelSize: Theme.fontSizeSmall; font.bold: true
-                    }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+
+                Text {
+                    text: sessionQueue === "playback" ? "tpolv" : "Events"
+                    color: Theme.textPrimary
+                    font.pixelSize: Theme.fontSizeTitle
+                    font.bold: true
+                }
+
+                Text {
+                    text: sessionQueue === "playback"
+                          ? "Playback review workspace"
+                          : "Anomaly list and operator decisions"
+                    color: Theme.textSecondary
+                    font.pixelSize: Theme.fontSizeSmall
                 }
             }
+
+            StatusPill {
+                text: sessionQueue === "playback" ? "PLAYBACK" : "PRODUCTION"
+                fill: sessionQueue === "playback" ? Theme.colorWarning : Theme.colorNormal
+                textColor: "#071018"
+            }
+
+            Text {
+                text: "Operator: " + journalController.operatorName + " / " + eventsModel.count + " events"
+                color: Theme.textSecondary
+                font.pixelSize: Theme.fontSizeSmall
+            }
         }
 
-        ListView {
-            Layout.fillWidth: true; Layout.fillHeight: true
-            model: eventsModel; clip: true; spacing: 2
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            spacing: 12
 
-            delegate: Rectangle {
-                width: ListView.view.width; height: 36
-                color: index % 2 === 0 ? Theme.surface : Theme.surfaceAlt
-                radius: Theme.radiusSmall
+            Panel {
+                Layout.preferredWidth: 560
+                Layout.fillHeight: true
+                title: "Event list"
+                subtitle: "SHF anomaly stream"
 
-                Row {
-                    anchors { fill: parent; leftMargin: 12; rightMargin: 12 }
-                    property real colW: width / root.colHeaders.length
+                Rectangle {
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        topMargin: 46
+                        margins: 10
+                    }
+                    height: 28
+                    radius: Theme.radiusSmall
+                    color: Theme.navBg
 
-                    // Time, Object, Sensor, Axis, Type
-                    Repeater {
-                        model: [evTime, objId, senId, axis, evType]
-                        Text {
-                            width: parent.colW; height: parent.height
-                            text: modelData; verticalAlignment: Text.AlignVCenter
-                            color: Theme.textPrimary; font.pixelSize: Theme.fontSizeSmall
-                            elide: Text.ElideRight
+                    Row {
+                        anchors {
+                            fill: parent
+                            leftMargin: 10
+                            rightMargin: 10
+                        }
+
+                        Repeater {
+                            model: ["Time", "Object", "Sensor", "Type", "Severity", "Review"]
+                            Text {
+                                width: parent.width / 6
+                                height: parent.height
+                                text: modelData
+                                color: Theme.textSecondary
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.bold: true
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
                         }
                     }
+                }
 
-                    // Severity — colored badge
-                    Item {
-                        width: parent.colW; height: parent.height
-                        Rectangle {
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: 72; height: 20; radius: 3
-                            color: sevColor
+                ListView {
+                    anchors {
+                        fill: parent
+                        margins: 10
+                        topMargin: 80
+                    }
+                    model: eventsModel
+                    clip: true
+                    spacing: 3
+
+                    delegate: Rectangle {
+                        width: ListView.view.width
+                        height: 42
+                        radius: Theme.radiusSmall
+                        color: root.selId === shfId ? "#183354" : (index % 2 === 0 ? Theme.surfaceAlt : Theme.surface)
+                        border.color: root.selId === shfId ? Theme.colorService : Theme.border
+                        border.width: root.selId === shfId ? 1 : 0
+
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: {
+                                root.selId = shfId
+                                root.selData = {
+                                    shfId: shfId, evTime: evTime, objId: objId, senId: senId,
+                                    evType: evType, severity: severity, sevColor: sevColor,
+                                    evStatus: evStatus, durText: durText, conf: conf, review: review
+                                }
+                            }
+                        }
+
+                        Row {
+                            anchors {
+                                fill: parent
+                                leftMargin: 10
+                                rightMargin: 10
+                            }
+                            property real colW: width / 6
+
+                            Repeater {
+                                model: [evTime, objId, senId, evType]
+                                Text {
+                                    width: parent.colW
+                                    height: parent.height
+                                    text: modelData
+                                    color: Theme.textPrimary
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                }
+                            }
+
+                            Item {
+                                width: parent.colW
+                                height: parent.height
+                                StatusPill {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: severity
+                                    fill: sevColor
+                                    textColor: severity === "LOW" || severity === "MEDIUM" ? "#081018" : "#ffffff"
+                                }
+                            }
+
                             Text {
-                                anchors.centerIn: parent
-                                text: severity
-                                color: (severity === "MEDIUM" || severity === "LOW") ? "#000" : "#fff"
-                                font.pixelSize: 10; font.bold: true
+                                width: parent.colW
+                                height: parent.height
+                                text: root.reviewText(review)
+                                color: root.reviewColor(review)
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.bold: true
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
                             }
                         }
                     }
 
-                    // Duration, Status
-                    Repeater {
-                        model: [duration, evStatus]
+                    ScrollBar.vertical: ScrollBar {}
+                }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 12
+
+                EventReviewPanel {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 260
+                    eventData: root.selectedEvent()
+                    reviewText: eventData ? root.reviewText(eventData.review) : "AUTO"
+                    reviewColor: eventData ? root.reviewColor(eventData.review) : Theme.textSecondary
+                    onConfirmRequested: root.sendReview("confirm")
+                    onRejectRequested: root.sendReview("reject")
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    spacing: 12
+
+                    Panel {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        title: "Waveform window"
+                        subtitle: "Raw archive hook for selected anomaly"
+
                         Text {
-                            width: parent.colW; height: parent.height
-                            text: modelData; verticalAlignment: Text.AlignVCenter
-                            color: index === 1 && evStatus === "ACTIVE"
-                                   ? Theme.colorWarning : Theme.textPrimary
-                            font.pixelSize: Theme.fontSizeSmall
+                            anchors.centerIn: parent
+                            width: parent.width - 40
+                            text: root.selectedEvent()
+                                  ? "Selected anomaly #" + root.selectedEvent().shfId + ". TDS waveform replay will plug in here."
+                                  : "Select an event to inspect waveform context."
+                            color: Theme.textSecondary
+                            font.pixelSize: Theme.fontSizeNormal
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+
+                    Panel {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        title: "Review notes"
+                        subtitle: "Audit trail"
+
+                        TextArea {
+                            anchors {
+                                fill: parent
+                                margins: 12
+                                topMargin: 48
+                            }
+                            placeholderText: "Operator notes"
+                            color: Theme.textPrimary
+                            placeholderTextColor: Theme.textSecondary
+                            wrapMode: TextArea.Wrap
+                            background: Rectangle {
+                                color: Theme.navBg
+                                radius: Theme.radiusSmall
+                                border.color: Theme.border
+                            }
                         }
                     }
                 }
             }
-
-            ScrollBar.vertical: ScrollBar {}
         }
     }
 }
