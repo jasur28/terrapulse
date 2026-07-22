@@ -10,8 +10,10 @@
 #include "bus/Bus.h"
 #include "bus/Soh.h"
 #include "bus/Master.h"
+#include "mseed/TdsArchive.h"
 
 #include <QCoreApplication>
+#include <memory>
 #include <QCommandLineParser>
 #include <QDateTime>
 #include <QFile>
@@ -42,12 +44,13 @@ int main(int argc, char* argv[]) {
     QCommandLineOption historicOpt("historic", "Replay keeps original timestamps (default: retime to now)");
     QCommandLineOption speedOpt  ("speed", "Replay speed factor", "x", "1");
     QCommandLineOption recordOpt ("record", "Also append every published sample to a CSV (t_ms,x,y,z)", "file");
+    QCommandLineOption archiveOpt("archive", "Also archive raw waveforms as miniSEED into this TDS directory", "dir");
     QCommandLineOption baudOpt   ("baud",    "Baud rate", "rate", "460800");
     QCommandLineOption stationOpt("station", "Station id", "id", "1");
     QCommandLineOption objectOpt ("object",  "Object id",  "id", "1");
     QCommandLineOption sensorOpt ("sensor",  "Sensor id",  "id", "1");
     parser.addOptions({portOpt, masterOpt, queueOpt, simOpt, rateOpt, replayOpt, historicOpt,
-                       speedOpt, recordOpt, baudOpt, stationOpt, objectOpt, sensorOpt});
+                       speedOpt, recordOpt, archiveOpt, baudOpt, stationOpt, objectOpt, sensorOpt});
     parser.process(app);
 
     const quint32 station = parser.value(stationOpt).toUInt();
@@ -74,11 +77,21 @@ int main(int argc, char* argv[]) {
                         parser.value(recordOpt).toUtf8().constData());
     }
 
+    // Optional miniSEED TDS archive (raw waveforms on disk — feeds review/replay).
+    std::unique_ptr<tp::mseed::TdsArchive> tds;
+    if (parser.isSet(archiveOpt))
+        tds = std::make_unique<tp::mseed::TdsArchive>(parser.value(archiveOpt).toStdString());
+
     quint64 published = 0;
     // Single publish path shared by every source.
     auto publishSample = [&](qint64 t, double x, double y, double z, quint64 seq, quint32 rate) {
         if (recOut.device())
             recOut << t << ',' << x << ',' << y << ',' << z << '\n';
+        if (tds) {                       // gal -> integer counts (x10000), 3 axes
+            tds->addSample(object, sensor, 0, static_cast<int32_t>(std::lround(x * 10000.0)), t, rate);
+            tds->addSample(object, sensor, 1, static_cast<int32_t>(std::lround(y * 10000.0)), t, rate);
+            tds->addSample(object, sensor, 2, static_cast<int32_t>(std::lround(z * 10000.0)), t, rate);
+        }
         QVariantMap h;
         h["v"]          = 1;
         h["type"]       = "raw";
@@ -191,6 +204,7 @@ int main(int argc, char* argv[]) {
     QTimer stats;
     QObject::connect(&stats, &QTimer::timeout, [&]() {
         if (recOut.device()) recOut.flush();
+        if (tds) tds->flushAll();
         if (useSim || useReplay) {
             std::printf("[tpacq] %s published=%llu  queue=%s\n",
                         srcLabel, static_cast<unsigned long long>(published),

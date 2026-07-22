@@ -83,7 +83,6 @@ Backend logs go to `var/logs/`.
 
 ### Reviewing a recording (isolated playback)
 
-```powershell
 .\tpacq.exe --port COM6 --record rec.csv             # record from the device
 .\tpmaster.exe --db terrapulse.db --playback --playback-db pb.db
 .\tpproc.exe --queue playback

@@ -52,6 +52,32 @@ else()
     message(FATAL_ERROR "libzmq target not found after FetchContent")
 endif()
 
+# ── libmseed (FDSN miniSEED, EarthScope, Apache-2.0) ──────────────────────────
+# Waveform interchange format — lets us archive, replay and ingest data from any
+# miniSEED-capable device (vendor-neutral), like SeisComp. libmseed ships a
+# Makefile (no CMake), so we compile its C sources into a static lib ourselves.
+FetchContent_Declare(libmseed
+    GIT_REPOSITORY https://github.com/EarthScope/libmseed.git
+    GIT_TAG        v3.1.5
+)
+FetchContent_MakeAvailable(libmseed)
+
+file(GLOB LIBMSEED_SOURCES ${libmseed_SOURCE_DIR}/*.c)
+add_library(libmseed STATIC ${LIBMSEED_SOURCES})
+target_include_directories(libmseed PUBLIC ${libmseed_SOURCE_DIR})
+if(WIN32)
+    target_link_libraries(libmseed PUBLIC ws2_32)      # miniSEED time/byte-order helpers
+endif()
+
+# ── tpmseed — our C++ wrapper over libmseed (+ TDS archive) ───────────────────
+add_library(tpmseed STATIC src/mseed/Mseed.cpp src/mseed/TdsArchive.cpp)
+target_include_directories(tpmseed PUBLIC src)
+target_link_libraries(tpmseed PUBLIC libmseed)
+
+# ── mseed_smoke — miniSEED encode/decode roundtrip test (console exe) ──────────
+add_executable(mseed_smoke tools/mseed_smoke.cpp)
+target_link_libraries(mseed_smoke PRIVATE tpmseed)
+
 # ── tpbus — ZeroMQ message-bus wrapper ────────────────────────────────────────
 add_library(tpbus STATIC
     src/bus/Bus.cpp
@@ -70,7 +96,7 @@ add_executable(tpacq
     src/serial/SerialStreamReceiver.cpp
 )
 target_include_directories(tpacq PRIVATE src)
-target_link_libraries(tpacq PRIVATE tpbus Qt6::Core Qt6::SerialPort)
+target_link_libraries(tpacq PRIVATE tpbus tpmseed Qt6::Core Qt6::SerialPort)
 
 # ── tpmon — bus debug monitor (subscribe + print) ─────────────────────────────
 add_executable(tpmon tools/tpmon.cpp)
