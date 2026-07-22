@@ -109,8 +109,9 @@ Item {
                     MapView {
                         id: map
                         anchors.fill: parent
+                        provider: "osm"
                         markers: root.markerList
-                        tilesUrl: typeof mapsUrl !== "undefined" ? mapsUrl : ""
+                        tilesUrl: (typeof mapsUrl !== "undefined" && mapsUrl !== "") ? mapsUrl + "/osm" : ""
                         onMarkerClicked: function(index) { root.selected = index }
                     }
 

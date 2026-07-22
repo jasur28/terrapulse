@@ -1,5 +1,6 @@
 #include "analysis/AnalysisEngine.h"
 #include <cmath>
+#include <vector>
 #include <algorithm>
 #include <numeric>
 #include <chrono>
@@ -140,12 +141,20 @@ SafRecord AnalysisEngine::analyse(const SdfRecord& sdf, uint64_t safId) const {
     const auto& d = sdf.waveformData;
     float mean = d.empty() ? 0.0f : std::accumulate(d.begin(), d.end(), 0.0f) / d.size();
 
-    out.rms               = computeRms(d);
-    out.variance          = computeVariance(d, mean);
+    // Analyse the AC (vibration) component: subtract the DC offset (e.g. gravity
+    // on a tilted axis). Without this a DC-biased channel never crosses zero, so
+    // the dominant frequency reads 0 and RMS/energy are swamped by the offset —
+    // which made health/frequency look "broken" on real sensors.
+    std::vector<float> ac;
+    ac.reserve(d.size());
+    for (float v : d) ac.push_back(v - mean);
+
+    out.rms               = computeRms(ac);
+    out.variance          = computeVariance(d, mean);   // already mean-relative
     out.standardDeviation = std::sqrt(out.variance);
-    out.energy            = computeEnergy(d);
-    out.maxAmplitude      = computeMaxAmplitude(d);
-    out.dominantFrequency = computeDominantFrequency(d, sdf.samplingRate);
+    out.energy            = computeEnergy(ac);
+    out.maxAmplitude      = computeMaxAmplitude(ac);
+    out.dominantFrequency = computeDominantFrequency(ac, sdf.samplingRate);
     out.frequencyShift    = (m_thresholds.baselineFreq > 0.0f)
                               ? (out.dominantFrequency - m_thresholds.baselineFreq)
                               : 0.0f;

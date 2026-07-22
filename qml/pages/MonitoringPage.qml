@@ -83,6 +83,20 @@ Item {
         onTriggered: root.computeSpectrum()
     }
 
+    // Throttle the live trace to ~20 fps instead of the 200 Hz sample rate.
+    Timer {
+        interval: 50
+        running: true
+        repeat: true
+        onTriggered: {
+            traceView.pointsX = root.ptsX
+            traceView.pointsY = root.ptsY
+            traceView.pointsZ = root.ptsZ
+            traceView.latestTime = root.latestRelT
+            traceView.requestPaint()
+        }
+    }
+
     Connections {
         target: appController
         function onSafReceived(saf) {
@@ -112,18 +126,14 @@ Item {
         function onSampleReceived(sample) {
             var t = sample.timestampMs / 1000.0
             if (root.baseTime < 0) root.baseTime = t
-            var relT = t - root.baseTime
+            root.latestRelT = t - root.baseTime
 
-            root.ptsX.push({ t: relT, v: sample.x })
-            root.ptsY.push({ t: relT, v: sample.y })
-            root.ptsZ.push({ t: relT, v: sample.z })
-            root.latestRelT = relT
+            root.ptsX.push({ t: root.latestRelT, v: sample.x })
+            root.ptsY.push({ t: root.latestRelT, v: sample.y })
+            root.ptsZ.push({ t: root.latestRelT, v: sample.z })
             root.trimPoints()
-
-            traceView.pointsX = root.ptsX
-            traceView.pointsY = root.ptsY
-            traceView.pointsZ = root.ptsZ
-            traceView.latestTime = root.latestRelT
+            // The chart is repainted on a timer (below), NOT per sample — repainting
+            // at the 200 Hz sample rate is what made the UI sluggish.
         }
     }
 

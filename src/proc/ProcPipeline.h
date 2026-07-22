@@ -9,6 +9,7 @@
 #include <functional>
 #include <vector>
 #include <cstdint>
+#include <unordered_map>
 
 namespace tp {
 
@@ -48,6 +49,17 @@ private:
     static QString severityColor(SeverityLevel s);
     static QString trendName(Trend t);
     static QString statusName(AnomalyStatus s);
+
+    // Per-sensor-axis baseline (the structure's "normal"), learned from the first
+    // kCalibWindows windows. Health and anomalies are judged relative to it.
+    struct BaselineState {
+        AnalysisThresholds th;                 // thresholds with a calibrated baseline
+        double sumRms = 0.0, sumEnergy = 0.0, sumFreq = 0.0;
+        int    count = 0;
+        bool   ready = false;
+    };
+    std::unordered_map<uint64_t, BaselineState> m_baseline;
+    static constexpr int kCalibWindows = 20;   // ~10 s of "quiet" startup
 
     AnalysisEngine m_analysis;
     HistoryEngine  m_history;

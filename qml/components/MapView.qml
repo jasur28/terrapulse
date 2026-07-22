@@ -9,6 +9,12 @@ Item {
     property string tilesUrl: ""
     property real minSpanLon: 30
 
+    // "seiscomp" = offline world relief (world<quad>.png, equirectangular)
+    // "osm"      = OpenStreetMap street tiles (z/x/y, Web Mercator)
+    property string provider: "seiscomp"
+    property int osmMinZoom: 8
+    property int osmMaxZoom: 13
+
     signal markerClicked(int index)
 
     property real centerLon: 0
@@ -26,6 +32,19 @@ Item {
 
     function clamp(v, lo, hi) {
         return Math.max(lo, Math.min(hi, v))
+    }
+
+    function minSpan() { return control.provider === "osm" ? 0.02 : 8 }
+    function maxSpan() { return control.provider === "osm" ? 1.5 : 360 }
+
+    // Web-Mercator helpers (OSM mode).
+    function mercN(lat) {                       // normalized Y: 0 = north, 1 = south
+        var r = control.clamp(lat, -85.05, 85.05) * Math.PI / 180
+        return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2
+    }
+    function tileY2lat(y, n) {
+        var m = Math.PI * (1 - 2 * y / n)
+        return 180 / Math.PI * Math.atan(0.5 * (Math.exp(m) - Math.exp(-m)))
     }
 
     function tileBounds(quad) {
@@ -58,30 +77,48 @@ Item {
     }
 
     function buildTiles() {
-        var level = control.zoomLevel
-        var count = Math.pow(4, level)
         var out = []
 
-        for (var k = 0; k < count; k++) {
-            var q = ""
-            var x = k
-            for (var j = 0; j < level; j++) {
-                q = (x % 4) + q
-                x = Math.floor(x / 4)
+        if (control.provider === "osm") {
+            var z = control.zoomLevel
+            var n = Math.pow(2, z)
+            var x1 = Math.floor((vLonMin + 180) / 360 * n)
+            var x2 = Math.floor((vLonMax + 180) / 360 * n)
+            var y1 = Math.floor(control.mercN(vLatMax) * n)   // north => smaller y
+            var y2 = Math.floor(control.mercN(vLatMin) * n)
+            for (var x = x1; x <= x2; x++) {
+                for (var y = y1; y <= y2; y++) {
+                    if (x < 0 || y < 0 || x >= n || y >= n) continue
+                    out.push({
+                        src: "/" + z + "/" + x + "/" + y + ".png",
+                        lonMin: x / n * 360 - 180,
+                        lonMax: (x + 1) / n * 360 - 180,
+                        latMax: control.tileY2lat(y, n),
+                        latMin: control.tileY2lat(y + 1, n)
+                    })
+                }
             }
-
-            var b = tileBounds(q)
-            if (b.lonMax < vLonMin || b.lonMin > vLonMax ||
-                b.latMax < vLatMin || b.latMin > vLatMax) {
-                continue
+        } else {
+            var level = control.zoomLevel
+            var count = Math.pow(4, level)
+            for (var k = 0; k < count; k++) {
+                var q = ""
+                var qx = k
+                for (var j = 0; j < level; j++) {
+                    q = (qx % 4) + q
+                    qx = Math.floor(qx / 4)
+                }
+                var b = tileBounds(q)
+                if (b.lonMax < vLonMin || b.lonMin > vLonMax ||
+                    b.latMax < vLatMin || b.latMin > vLatMax) {
+                    continue
+                }
+                out.push({
+                    src: "/world" + q + ".png",
+                    lonMin: b.lonMin, lonMax: b.lonMax,
+                    latMin: b.latMin, latMax: b.latMax
+                })
             }
-            out.push({
-                quad: q,
-                lonMin: b.lonMin,
-                lonMax: b.lonMax,
-                latMin: b.latMin,
-                latMax: b.latMax
-            })
         }
 
         control.tiles = out
@@ -91,23 +128,28 @@ Item {
         if (width <= 0 || height <= 0) return
 
         var aspect = width / height
-        spanLon = clamp(spanLon, 8, 360)
+        spanLon = clamp(spanLon, minSpan(), maxSpan())
         var spanLat = spanLon / aspect
 
         if (spanLat > 180) {
             spanLat = 180
-            spanLon = Math.min(360, spanLat * aspect)
+            spanLon = Math.min(maxSpan(), spanLat * aspect)
         }
 
         centerLon = clamp(centerLon, -180 + spanLon / 2, 180 - spanLon / 2)
-        centerLat = clamp(centerLat, -90 + spanLat / 2, 90 - spanLat / 2)
+        centerLat = clamp(centerLat, -85 + spanLat / 2, 85 - spanLat / 2)
 
         vLonMin = centerLon - spanLon / 2
         vLonMax = centerLon + spanLon / 2
         vLatMin = centerLat - spanLat / 2
         vLatMax = centerLat + spanLat / 2
 
-        zoomLevel = clamp(Math.round(Math.log(720 / spanLon) / Math.log(2)), 0, 4)
+        if (control.provider === "osm") {
+            var zz = Math.round(Math.log(width * 360 / (spanLon * 256)) / Math.log(2))
+            zoomLevel = clamp(zz, osmMinZoom, osmMaxZoom)
+        } else {
+            zoomLevel = clamp(Math.round(Math.log(720 / spanLon) / Math.log(2)), 0, 4)
+        }
         buildTiles()
     }
 
@@ -130,23 +172,24 @@ Item {
                 la1 = Math.max(la1, la)
             }
 
+            var defSpan = control.provider === "osm" ? 0.25 : control.minSpanLon
             if (lo0 < lo1 || la0 < la1) {
                 centerLon = (lo0 + lo1) / 2
                 centerLat = (la0 + la1) / 2
-                spanLon = Math.max((lo1 - lo0) * 1.8, control.minSpanLon)
+                spanLon = Math.max((lo1 - lo0) * 1.8, defSpan)
             } else if (lo0 < 1e9) {
                 centerLon = lo0
                 centerLat = la0
-                spanLon = control.minSpanLon
+                spanLon = defSpan
             } else {
-                centerLon = 0
-                centerLat = 0
-                spanLon = 360
+                centerLon = control.provider === "osm" ? 69.28 : 0
+                centerLat = control.provider === "osm" ? 41.31 : 0
+                spanLon = control.provider === "osm" ? 0.3 : 360
             }
         } else {
-            centerLon = 0
-            centerLat = 0
-            spanLon = 360
+            centerLon = control.provider === "osm" ? 69.28 : 0
+            centerLat = control.provider === "osm" ? 41.31 : 0
+            spanLon = control.provider === "osm" ? 0.3 : 360
         }
 
         initialized = true
@@ -157,7 +200,7 @@ Item {
         var lon = vLonMin + mx / width * (vLonMax - vLonMin)
         var lat = vLatMax - my / height * (vLatMax - vLatMin)
 
-        spanLon = clamp(spanLon * (deltaY > 0 ? 0.83 : 1.20), 8, 360)
+        spanLon = clamp(spanLon * (deltaY > 0 ? 0.83 : 1.20), minSpan(), maxSpan())
         var spanLat = spanLon / (width / height)
         centerLon = lon - (mx / width - 0.5) * spanLon
         centerLat = lat + (my / height - 0.5) * spanLat
@@ -175,6 +218,11 @@ Item {
     }
 
     function yOf(lat) {
+        if (control.provider === "osm") {
+            var n0 = control.mercN(vLatMax)   // top
+            var n1 = control.mercN(vLatMin)   // bottom
+            return (control.mercN(lat) - n0) / (n1 - n0) * height
+        }
         return (vLatMax - lat) / (vLatMax - vLatMin) * height
     }
 
@@ -199,7 +247,7 @@ Item {
             y: control.yOf(modelData.latMax)
             width: control.xOf(modelData.lonMax) - control.xOf(modelData.lonMin)
             height: control.yOf(modelData.latMin) - control.yOf(modelData.latMax)
-            source: control.tilesUrl.length > 0 ? control.tilesUrl + "/world" + modelData.quad + ".png" : ""
+            source: control.tilesUrl.length > 0 ? control.tilesUrl + modelData.src : ""
             fillMode: Image.Stretch
             smooth: true
             asynchronous: true

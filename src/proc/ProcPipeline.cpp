@@ -49,11 +49,30 @@ void ProcPipeline::flushWindow() {
     for (const auto& a : axes) {
         SdfRecord sdf = makeSdf(a.axis, a.buf);
 
-        // Establish baseline from the first 5 windows.
-        if (m_windowsProcessed <= 5)
-            m_analysis.updateBaseline(sdf);
+        // Judge this axis against ITS OWN learned baseline.
+        const uint64_t key = (static_cast<uint64_t>(m_sensor) << 8) | static_cast<uint64_t>(a.axis);
+        BaselineState& b = m_baseline[key];          // default = uncalibrated thresholds
+        m_analysis.setThresholds(b.th);
 
         SafRecord saf = m_analysis.analyse(sdf, m_safCounter++);
+
+        if (!b.ready) {
+            // Calibration period: accumulate the "normal" AC features, don't alarm.
+            b.sumRms    += saf.rms;
+            b.sumEnergy += saf.energy;
+            b.sumFreq   += saf.dominantFrequency;
+            if (++b.count >= kCalibWindows) {
+                b.th.baselineRms    = static_cast<float>(b.sumRms    / b.count);
+                b.th.baselineEnergy = static_cast<float>(b.sumEnergy / b.count);
+                b.th.baselineFreq   = static_cast<float>(b.sumFreq   / b.count);
+                b.ready = true;
+            }
+            saf.anomalyDetected = false;
+            saf.anomalyType     = AnomalyType::None;
+            saf.warningLevel    = WarningLevel::Normal;
+            saf.healthIndex     = 1.0f;
+        }
+
         if (onSaf) onSaf(toVariant(saf));
 
         auto shfOpt = m_history.processSaf(saf);
