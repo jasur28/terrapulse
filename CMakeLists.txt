@@ -96,6 +96,13 @@ add_executable(test_tdsarchive tests/test_tdsarchive.cpp)
 target_link_libraries(test_tdsarchive PRIVATE tpmseed)
 add_test(NAME tdsarchive COMMAND test_tdsarchive)
 
+# SeedLink server core: retention ring + packet framing (Stage 5).
+add_library(tpslinkcore STATIC src/slink/SeedLinkRing.cpp)
+target_include_directories(tpslinkcore PUBLIC src)
+add_executable(test_seedlinkring tests/test_seedlinkring.cpp)
+target_link_libraries(test_seedlinkring PRIVATE tpslinkcore)
+add_test(NAME seedlinkring COMMAND test_seedlinkring)
+
 # ── tpdump — inspect archived waveforms via a RecordStream URI ─────────────────
 add_executable(tpdump tools/tpdump.cpp)
 target_include_directories(tpdump PRIVATE src)
