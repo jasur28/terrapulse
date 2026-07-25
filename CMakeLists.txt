@@ -91,6 +91,11 @@ add_executable(test_streamid tests/test_streamid.cpp)
 target_link_libraries(test_streamid PRIVATE tpmseed)
 add_test(NAME streamid COMMAND test_streamid)
 
+# Layer "save": TDS archive round-trip + bytes/sample measurement.
+add_executable(test_tdsarchive tests/test_tdsarchive.cpp)
+target_link_libraries(test_tdsarchive PRIVATE tpmseed)
+add_test(NAME tdsarchive COMMAND test_tdsarchive)
+
 # ── tpdump — inspect archived waveforms via a RecordStream URI ─────────────────
 add_executable(tpdump tools/tpdump.cpp)
 target_include_directories(tpdump PRIVATE src)
