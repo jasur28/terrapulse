@@ -163,10 +163,14 @@ private:
                 if (d.sampleRate > 0) m_lastRate = d.sampleRate;
                 const int comp = componentOf(d.sid);
                 if (comp < 0) continue;
-                if (m_tds)
+                if (m_tds) {
+                    // Preserve the identity the upstream already assigned — a
+                    // SeedLink source is never relabelled (АРХИТЕКТУРА §15).
+                    m_tds->setSourceId(m_opt.object, m_opt.sensor, comp, d.sid);
                     for (std::size_t i = 0; i < d.samples.size(); ++i)
                         m_tds->addSample(m_opt.object, m_opt.sensor, comp, d.samples[i],
                                          d.startTimeMs + int64_t(i * 1000.0 / d.sampleRate), d.sampleRate);
+                }
                 for (std::size_t i = 0; i < d.samples.size(); ++i)
                     m_axis[comp].emplace_back(d.startTimeMs + int64_t(i * 1000.0 / d.sampleRate), d.samples[i]);
             }

@@ -11,6 +11,7 @@
 
 #include "serial/SerialStreamReceiver.h"
 #include "mseed/TdsArchive.h"
+#include "mseed/StreamId.h"
 #include "terrapulse/client/application.h"
 
 #include <QCoreApplication>
@@ -41,6 +42,11 @@ struct Config {
     int     baud = 460800;
     QString port, replayFile, recordFile, archiveDir;
     bool    record = false, archive = false;
+    // FDSN identity for this raw source. When stationCode is set, the archive is
+    // named by the computed StreamId (band/instrument code from kind + rate);
+    // empty keeps the legacy numeric id, so existing setups are unchanged.
+    QString network = "TP", stationCode, kind = "accelerometer";
+    double  cornerPeriod = 1e9;   // >=10 s => broadband band code (accelerometer)
 };
 
 class AcqApplication : public tp::client::Application {
@@ -61,8 +67,10 @@ public:
                 std::printf("[tpacq] cannot open --record file '%s'\n",
                             m_cfg.recordFile.toUtf8().constData());
         }
-        if (m_cfg.archive)
+        if (m_cfg.archive) {
             m_tds = std::make_unique<tp::mseed::TdsArchive>(m_cfg.archiveDir.toStdString());
+            bindArchiveIdentity();
+        }
 
         m_serial.setBaudRate(m_cfg.baud);
         QObject::connect(&m_serial, &SerialStreamReceiver::sampleReceived,
@@ -95,6 +103,28 @@ public:
 private:
     const char* srcLabel() const {
         return m_cfg.useReplay ? "replay" : m_cfg.useSim ? "sim" : "serial";
+    }
+
+    // Resolve this raw source's FDSN identity from config and bind the archive's
+    // three axes to it. Only when a stationCode is configured — otherwise the
+    // archive keeps the legacy numeric id (unchanged behaviour).
+    void bindArchiveIdentity() {
+        if (!m_tds || m_cfg.stationCode.isEmpty()) return;
+        const auto kind = m_cfg.kind == "seismometer"
+                              ? tp::mseed::Instrument::Seismometer
+                              : tp::mseed::Instrument::Accelerometer;
+        for (int comp = 0; comp < 3; ++comp) {
+            const auto r = tp::mseed::makeStreamId(
+                m_cfg.network.toStdString(), m_cfg.stationCode.toStdString(),
+                m_cfg.sensor, kind, m_cfg.simRate, m_cfg.cornerPeriod, comp);
+            if (r.ok) {
+                m_tds->setSourceId(m_cfg.object, m_cfg.sensor, comp, r.id.sourceId());
+                std::printf("[tpacq] channel %d -> %s\n", comp, r.id.sourceId().c_str());
+            } else {
+                std::printf("[tpacq] identity error (comp %d): %s\n", comp, r.error.c_str());
+            }
+        }
+        std::fflush(stdout);
     }
 
     // Single publish path shared by every source.
@@ -276,14 +306,23 @@ int main(int argc, char* argv[]) {
     QCommandLineOption stationOpt("station", "Station id", "id", "1");
     QCommandLineOption objectOpt ("object",  "Object id",  "id", "1");
     QCommandLineOption sensorOpt ("sensor",  "Sensor id",  "id", "1");
+    QCommandLineOption netOpt    ("network",    "FDSN network code (<=2 chars)", "net", "TP");
+    QCommandLineOption staCodeOpt("station-code","FDSN station code (<=5 chars); enables FDSN archive naming", "code");
+    QCommandLineOption kindOpt   ("kind",       "Instrument: accelerometer | seismometer", "kind", "accelerometer");
+    QCommandLineOption cornerOpt ("corner",     "Sensor corner period (s); >=10 => broadband band code", "sec", "1e9");
     parser.addOptions({portOpt, masterOpt, queueOpt, simOpt, simEventsOpt, rateOpt, replayOpt, historicOpt,
-                       speedOpt, recordOpt, archiveOpt, bufferOpt, baudOpt, stationOpt, objectOpt, sensorOpt});
+                       speedOpt, recordOpt, archiveOpt, bufferOpt, baudOpt, stationOpt, objectOpt, sensorOpt,
+                       netOpt, staCodeOpt, kindOpt, cornerOpt});
     parser.process(app);
 
     Config cfg;
     cfg.station    = parser.value(stationOpt).toUInt();
     cfg.object     = parser.value(objectOpt).toUInt();
     cfg.sensor     = parser.value(sensorOpt).toUInt();
+    cfg.network     = parser.value(netOpt);
+    cfg.stationCode = parser.value(staCodeOpt);
+    cfg.kind        = parser.value(kindOpt);
+    cfg.cornerPeriod= parser.value(cornerOpt).toDouble();
     cfg.simRate    = std::max(1u, parser.value(rateOpt).toUInt());
     cfg.useSim     = parser.isSet(simOpt);
     cfg.simEvents  = parser.isSet(simEventsOpt);

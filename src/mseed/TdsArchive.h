@@ -17,6 +17,14 @@ public:
     explicit TdsArchive(std::string root, int recordSamples = 200, int encoding = Steim2);
     ~TdsArchive();
 
+    // Bind a channel's FDSN source id BEFORE its samples arrive. The caller
+    // owns identity resolution: a raw source (tpacq) resolves it from inventory
+    // (see StreamId), a SeedLink source (tpslink) passes the id it received —
+    // never relabelled. If a channel is never bound, addSample() falls back to
+    // the legacy numeric sourceId() so existing behaviour is unchanged.
+    void setSourceId(uint32_t objectId, uint32_t sensorId, int component,
+                     std::string sid);
+
     // One integer sample (device counts) for a channel.
     void addSample(uint32_t objectId, uint32_t sensorId, int component,
                    int32_t value, int64_t timeMs, double sampleRate);

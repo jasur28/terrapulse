@@ -17,13 +17,25 @@ TdsArchive::TdsArchive(std::string root, int recordSamples, int encoding)
 
 TdsArchive::~TdsArchive() { flushAll(); }
 
+namespace {
+uint64_t chanKey(uint32_t objectId, uint32_t sensorId, int component) {
+    return (static_cast<uint64_t>(objectId) << 20)
+         | (static_cast<uint64_t>(sensorId) << 4)
+         | static_cast<uint64_t>(component & 0xF);
+}
+} // namespace
+
+void TdsArchive::setSourceId(uint32_t objectId, uint32_t sensorId, int component,
+                             std::string sid) {
+    m_chans[chanKey(objectId, sensorId, component)].sid = std::move(sid);
+}
+
 void TdsArchive::addSample(uint32_t objectId, uint32_t sensorId, int component,
                            int32_t value, int64_t timeMs, double sampleRate) {
-    const uint64_t key = (static_cast<uint64_t>(objectId) << 20)
-                       | (static_cast<uint64_t>(sensorId) << 4)
-                       | static_cast<uint64_t>(component & 0xF);
-    Chan& c = m_chans[key];
+    Chan& c = m_chans[chanKey(objectId, sensorId, component)];
     if (c.buf.empty()) {
+        // Bound by the caller (setSourceId) -> use it; otherwise fall back to
+        // the legacy numeric id so unbound callers behave exactly as before.
         if (c.sid.empty()) c.sid = sourceId(objectId, sensorId, component);
         c.sampleRate = sampleRate;
         c.startMs    = timeMs;
