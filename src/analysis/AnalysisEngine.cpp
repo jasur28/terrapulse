@@ -1,4 +1,5 @@
 #include "analysis/AnalysisEngine.h"
+#include "analysis/Spectrum.h"
 #include <cmath>
 #include <vector>
 #include <algorithm>
@@ -38,15 +39,12 @@ float AnalysisEngine::computeMaxAmplitude(const std::vector<float>& data) {
 }
 
 float AnalysisEngine::computeDominantFrequency(const std::vector<float>& data, uint32_t samplingRate) {
-    // Zero-crossing rate method — reliable, no external dependencies.
-    if (data.size() < 4 || samplingRate == 0) return 0.0f;
-    int crossings = 0;
-    for (size_t i = 1; i < data.size(); ++i) {
-        if ((data[i - 1] >= 0.0f) != (data[i] >= 0.0f))
-            ++crossings;
-    }
-    float duration = static_cast<float>(data.size()) / static_cast<float>(samplingRate);
-    return static_cast<float>(crossings) / (2.0f * duration);
+    // Real FFT peak (Hann-windowed, parabolic sub-bin interpolation). For a
+    // structure this peak is its natural/modal frequency — the quantity whose
+    // drift over time indicates stiffness loss, so we want the true spectral
+    // peak, not a zero-crossing count (which noise crossings badly inflate).
+    // Band-limited to the structural range to ignore DC/drift.
+    return static_cast<float>(tp::spec::dominantFrequency(data, samplingRate, 0.3, 0.0));
 }
 
 float AnalysisEngine::computeHealthIndex(float rms, float energy, float maxAmp, float freqShift) const {

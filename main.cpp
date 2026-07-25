@@ -2,15 +2,38 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QCommandLineParser>
+#include <QQuickStyle>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QTextStream>
+#include <QDateTime>
+#include <QDebug>
 #include <QUrl>
 #include "controllers/AppController.h"
 #include "controllers/BusClient.h"
 #include "controllers/InventoryModel.h"
 #include "controllers/JournalController.h"
+#include "controllers/WaveformService.h"
 #include "bus/Master.h"
 
 int main(int argc, char *argv[]) {
+    static QFile logFile(QFileInfo(QString::fromLocal8Bit(argv[0])).absoluteDir().absoluteFilePath("terrapulse-gui.log"));
+    if (logFile.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        qInstallMessageHandler([](QtMsgType type, const QMessageLogContext&, const QString& msg) {
+            QTextStream out(&logFile);
+            const char* level = type == QtDebugMsg ? "DEBUG" :
+                                type == QtInfoMsg ? "INFO" :
+                                type == QtWarningMsg ? "WARN" :
+                                type == QtCriticalMsg ? "CRIT" : "FATAL";
+            out << QDateTime::currentDateTime().toString(Qt::ISODate) << " "
+                << level << " " << msg << "\n";
+            out.flush();
+        });
+    }
+
+    QQuickStyle::setStyle("Basic");
+
     QGuiApplication app(argc, argv);
     app.setApplicationName("TerraPulse");
     app.setOrganizationName("TerraPulse");
@@ -23,8 +46,18 @@ int main(int argc, char *argv[]) {
     parser.addHelpOption();
     QCommandLineOption masterOpt({"m", "master"}, "tpmaster host", "host", "127.0.0.1");
     QCommandLineOption queueOpt("queue", "Queue to view: production (live) | playback (review/tpolv)", "name", "production");
-    parser.addOptions({masterOpt, queueOpt});
+    QCommandLineOption viewOpt("view", "GUI view: full | dashboard | tprttv | tpmap/tpmv | tpolv", "name", "full");
+    parser.addOptions({masterOpt, queueOpt, viewOpt});
     parser.process(app);
+
+    QString requestedView = parser.value(viewOpt).toLower();
+    if (requestedView == "full") {
+        const QString exeName = QFileInfo(QString::fromLocal8Bit(argv[0])).baseName().toLower();
+        if (exeName == "tprttv" || exeName == "tpmap" || exeName == "tpmv" || exeName == "tpolv")
+            requestedView = exeName;
+    }
+    if (requestedView == "tpmv")
+        requestedView = "tpmap";
 
     const std::string host  = parser.value(masterOpt).toStdString();
     const auto        queue = tp::master::queueFromName(parser.value(queueOpt).toStdString());
@@ -42,6 +75,8 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("journalController", &journal);
     engine.rootContext()->setContextProperty("sessionQueue",
                                              QString::fromLatin1(tp::master::queueName(queue)));
+    engine.rootContext()->setContextProperty("appView", requestedView);
+    engine.rootContext()->setContextProperty("singleView", requestedView != "full");
 
     // Offline map tiles (share/maps). TP_SHARE overrides for deployment; else find
     // the source tree's share/maps relative to the executable.
@@ -58,8 +93,29 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty(
         "mapsUrl", mapsDir.isEmpty() ? QString() : QUrl::fromLocalFile(mapsDir).toString());
 
+    // TDS miniSEED archive for waveform review (written by tpacq/tpslink --archive).
+    // TP_TDS overrides; else find var/tds relative to the executable or cwd.
+    QString tdsDir = qEnvironmentVariable("TP_TDS");
+    for (const QString& rel : { QStringLiteral("../../var/tds"),
+                                QStringLiteral("../../../var/tds"),
+                                QStringLiteral("var/tds") }) {
+        if (!tdsDir.isEmpty() && QDir(tdsDir).exists()) break;
+        const QString cand = appDir.absoluteFilePath(rel);
+        if (QDir(cand).exists()) { tdsDir = cand; break; }
+    }
+    static WaveformService waveform(tdsDir);
+    engine.rootContext()->setContextProperty("waveform", &waveform);
+
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
-                     &app, []() { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
+                     &app, []() {
+                         qCritical() << "QML object creation failed";
+                         QCoreApplication::exit(-1);
+                     }, Qt::QueuedConnection);
+    QObject::connect(&engine, &QQmlApplicationEngine::warnings,
+                     &app, [](const QList<QQmlError>& warnings) {
+                         for (const auto& warning : warnings)
+                             qWarning().noquote() << warning.toString();
+                     });
 
     engine.loadFromModule("TerraPulse", "Main");
     return app.exec();

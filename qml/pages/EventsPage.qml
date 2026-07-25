@@ -29,6 +29,8 @@ Item {
         return {
             shfId: id,
             evTime: new Date(shf.anomalyStartTime).toLocaleTimeString(Qt.locale(), "hh:mm:ss"),
+            tStart: shf.anomalyStartTime,
+            tEnd: shf.anomalyEndTime,
             objId: shf.objectId,
             senId: shf.sensorId,
             evType: shf.anomalyTypeName,
@@ -64,6 +66,40 @@ Item {
             }
 
             if (id === root.selId) root.selData = row   // keep the detail copy fresh
+        }
+    }
+
+    // Structure-level events from tpevent: many detections grouped into one
+    // incident, which is what an operator actually reasons about.
+    ListModel { id: groupedModel }
+    property var evtIndex: ({})        // eventId -> row index
+
+    Connections {
+        target: appController
+        function onEventReceived(e) {
+            var row = {
+                eventId: String(e.eventId),
+                objId: e.objectId,
+                started: new Date(e.tStart).toLocaleTimeString(Qt.locale(), "hh:mm:ss"),
+                types: e.anomalyTypes && e.anomalyTypes.length > 0 ? e.anomalyTypes : "—",
+                severity: e.severityName,
+                sevColor: e.severity >= 3 ? Theme.colorCritical
+                        : e.severity >= 2 ? "#FF6D00"
+                        : e.severity >= 1 ? Theme.colorWarning : Theme.colorNormal,
+                evStatus: e.statusName,
+                sensors: e.sensorCount,
+                detections: e.shfCount
+            }
+            var id = row.eventId
+            if (root.evtIndex.hasOwnProperty(id) && root.evtIndex[id] < groupedModel.count) {
+                groupedModel.set(root.evtIndex[id], row)
+            } else {
+                groupedModel.insert(0, row)
+                if (groupedModel.count > 200) groupedModel.remove(groupedModel.count - 1)
+                root.evtIndex = ({})
+                for (var k = 0; k < groupedModel.count; ++k)
+                    root.evtIndex[groupedModel.get(k).eventId] = k
+            }
         }
     }
 
@@ -134,8 +170,94 @@ Item {
             Layout.fillHeight: true
             spacing: 12
 
-            Panel {
+            ColumnLayout {
                 Layout.preferredWidth: 560
+                Layout.fillHeight: true
+                spacing: 12
+
+            // Grouped incidents: what tpevent made of the raw detections below.
+            Panel {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 190
+                title: "Structure events"
+                subtitle: "grouped incidents (tpevent)"
+
+                Text {
+                    anchors.centerIn: parent
+                    visible: groupedModel.count === 0
+                    text: "No grouped events yet."
+                    color: Theme.textSecondary
+                    font.pixelSize: Theme.fontSizeSmall
+                }
+
+                ListView {
+                    anchors { fill: parent; margins: 10; topMargin: 46 }
+                    model: groupedModel
+                    clip: true
+                    spacing: 3
+                    visible: groupedModel.count > 0
+
+                    delegate: Rectangle {
+                        width: ListView.view.width
+                        height: 30
+                        radius: Theme.radiusSmall
+                        color: index % 2 === 0 ? Theme.surfaceAlt : Theme.surface
+
+                        Row {
+                            anchors { fill: parent; leftMargin: 10; rightMargin: 10 }
+                            spacing: 0
+                            property real colW: width / 6
+
+                            Text {
+                                width: parent.colW; height: parent.height
+                                text: started; color: Theme.textPrimary
+                                font.pixelSize: Theme.fontSizeSmall
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Text {
+                                width: parent.colW; height: parent.height
+                                text: "obj " + objId; color: Theme.textPrimary
+                                font.pixelSize: Theme.fontSizeSmall
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Item {
+                                width: parent.colW; height: parent.height
+                                StatusPill {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: severity; fill: sevColor
+                                    textColor: severity === "LOW" || severity === "MEDIUM" ? "#081018" : "#ffffff"
+                                }
+                            }
+                            Text {
+                                width: parent.colW; height: parent.height
+                                text: types; color: Theme.textSecondary
+                                font.pixelSize: Theme.fontSizeSmall
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                width: parent.colW; height: parent.height
+                                text: sensors + " sen / " + detections + " det"
+                                color: Theme.textSecondary
+                                font.pixelSize: Theme.fontSizeSmall
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            Text {
+                                width: parent.colW; height: parent.height
+                                text: evStatus
+                                color: evStatus === "ACTIVE" ? Theme.colorWarning : Theme.colorNormal
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.bold: true
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+                    }
+                    ScrollBar.vertical: ScrollBar {}
+                }
+            }
+
+            Panel {
+                Layout.fillWidth: true
                 Layout.fillHeight: true
                 title: "Event list"
                 subtitle: "SHF anomaly stream"
@@ -198,7 +320,8 @@ Item {
                             onClicked: {
                                 root.selId = shfId
                                 root.selData = {
-                                    shfId: shfId, evTime: evTime, objId: objId, senId: senId,
+                                    shfId: shfId, evTime: evTime, tStart: tStart, tEnd: tEnd,
+                                    objId: objId, senId: senId,
                                     evType: evType, severity: severity, sevColor: sevColor,
                                     evStatus: evStatus, durText: durText, conf: conf, review: review
                                 }
@@ -253,6 +376,7 @@ Item {
                     ScrollBar.vertical: ScrollBar {}
                 }
             }
+            }   // end left column (structure events + anomaly list)
 
             ColumnLayout {
                 Layout.fillWidth: true
@@ -278,18 +402,18 @@ Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         title: "Waveform window"
-                        subtitle: "Raw archive hook for selected anomaly"
+                        subtitle: "Recorded X/Y/Z around the selected anomaly (TDS archive)"
 
-                        Text {
-                            anchors.centerIn: parent
-                            width: parent.width - 40
-                            text: root.selectedEvent()
-                                  ? "Selected anomaly #" + root.selectedEvent().shfId + ". TDS waveform replay will plug in here."
-                                  : "Select an event to inspect waveform context."
-                            color: Theme.textSecondary
-                            font.pixelSize: Theme.fontSizeNormal
-                            horizontalAlignment: Text.AlignHCenter
-                            wrapMode: Text.WordWrap
+                        WaveformReview {
+                            anchors {
+                                fill: parent
+                                margins: 10
+                                topMargin: 46
+                            }
+                            object: root.selectedEvent() ? root.selectedEvent().objId : 0
+                            sensor: root.selectedEvent() ? root.selectedEvent().senId : 0
+                            tStart: root.selectedEvent() ? root.selectedEvent().tStart : 0
+                            tEnd:   root.selectedEvent() ? root.selectedEvent().tEnd : 0
                         }
                     }
 

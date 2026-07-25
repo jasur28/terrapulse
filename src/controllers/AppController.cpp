@@ -7,15 +7,18 @@ AppController::AppController(const std::string& endpoint, QObject* parent)
 {
     m_sub.subscribe("saf.");
     m_sub.subscribe("shf.");
+    m_sub.subscribe("evt.");
+    m_sub.subscribe("wfp.");
+    m_sub.subscribe("qc.");
 
     connect(&m_timer, &QTimer::timeout, this, &AppController::poll);
-    m_timer.start(16); // ~60 Hz; drains all pending results each tick
+    m_timer.start(50); // ~20 Hz; bounded drain keeps the GUI event loop responsive
 }
 
 void AppController::poll() {
     bool windowsChanged = false;
 
-    for (int i = 0; i < 4000; ++i) {
+    for (int i = 0; i < 500; ++i) {
         auto m = m_sub.receive(0);
         if (!m) break;
 
@@ -30,6 +33,12 @@ void AppController::poll() {
             }
         } else if (m->topic.rfind("shf.", 0) == 0) {
             emit shfReceived(map);
+        } else if (m->topic.rfind("evt.", 0) == 0) {
+            emit eventReceived(map);
+        } else if (m->topic.rfind("wfp.", 0) == 0) {
+            emit wfparamReceived(map);
+        } else if (m->topic.rfind("qc.", 0) == 0) {
+            emit qcReceived(map);
         }
     }
 

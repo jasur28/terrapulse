@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<seiscomp>
+  <module name="tpmap" category="GUI">
+    <description>Map view for structures, sensors, ground motion, QC and events.</description>
+    <parameter name="connection.subscriptions" type="list:string"/>
+    <parameter name="displaymode" type="string" default="network"/>
+    <parameter name="annotations" type="boolean" default="false"/>
+    <parameter name="mapLegendPosition" type="string" default="topright"/>
+    <parameter name="eventLegendPosition" type="string" default="bottomleft"/>
+    <group name="stations">
+      <parameter name="groundMotionRecordLifeSpan" type="int" default="600"/>
+      <parameter name="triggerTimeout" type="int" default="900"/>
+      <parameter name="groundMotionFilter" type="string"/>
+    </group>
+  </module>
+</seiscomp>

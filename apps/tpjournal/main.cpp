@@ -5,14 +5,43 @@
 //   Usage:  tpjournal --event <shfId> --action confirm|reject|reclassify|comment
 //                     [--operator NAME] [--note "..."] [--master 127.0.0.1]
 
-#include "bus/Bus.h"
-#include "bus/Journal.h"
-#include "bus/Master.h"
+#include "terrapulse/client/application.h"
+#include "terrapulse/messaging/journal.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
-#include <QTimer>
 #include <cstdio>
+
+namespace {
+
+// A one-shot publisher: no subscriptions, no heartbeat. init() schedules the
+// single message (after the slow-joiner settle) and then quits.
+class JournalApplication : public tp::client::Application {
+public:
+    JournalApplication(tp::client::ApplicationSettings settings, qulonglong eventId,
+                       QString action, QString op, QString note)
+        : Application(std::move(settings)), m_eventId(eventId),
+          m_action(std::move(action)), m_op(std::move(op)), m_note(std::move(note)) {}
+
+    bool init() override {
+        if (!Application::init()) return false;
+        publishThenQuit([this]() {
+            publish(tp::messaging::journal(m_eventId, m_action, m_op, m_note));
+            std::printf("[tpjournal] event=%llu action=%s operator=%s -> %s\n",
+                        static_cast<unsigned long long>(m_eventId),
+                        m_action.toUtf8().constData(), m_op.toUtf8().constData(),
+                        messagingUrl().toUtf8().constData());
+            std::fflush(stdout);
+        });
+        return true;
+    }
+
+private:
+    qulonglong m_eventId;
+    QString m_action, m_op, m_note;
+};
+
+} // namespace
 
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
@@ -34,21 +63,15 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
-    const qulonglong eventId = parser.value(eventOpt).toULongLong();
-    const std::string endpoint = tp::master::in(parser.value(masterOpt).toStdString());
-    tp::Publisher pub(endpoint, /*bind=*/false);
+    tp::client::ApplicationSettings settings;
+    settings.moduleName = "tpjournal";
+    settings.masterHost = parser.value(masterOpt);
+    settings.queue      = "production";
+    settings.sohIntervalSeconds = 0;        // one-shot: no heartbeat
 
-    // Publish after a short delay so the broker's subscription has propagated.
-    QTimer::singleShot(1600, [&]() {
-        pub.publish(tp::journalMessage(eventId, parser.value(actionOpt),
-                                       parser.value(opOpt), parser.value(noteOpt)));
-        std::printf("[tpjournal] event=%llu action=%s operator=%s -> %s\n",
-                    static_cast<unsigned long long>(eventId),
-                    parser.value(actionOpt).toUtf8().constData(),
-                    parser.value(opOpt).toUtf8().constData(), endpoint.c_str());
-        std::fflush(stdout);
-        QTimer::singleShot(400, &app, &QCoreApplication::quit);
-    });
-
-    return app.exec();
+    JournalApplication journal(std::move(settings),
+                               parser.value(eventOpt).toULongLong(),
+                               parser.value(actionOpt), parser.value(opOpt),
+                               parser.value(noteOpt));
+    return journal.exec();
 }

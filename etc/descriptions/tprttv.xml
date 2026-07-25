@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<seiscomp>
+  <module name="tprttv" category="GUI">
+    <description>Realtime waveform trace viewer for accelerometer streams.</description>
+    <parameter name="connection.subscriptions" type="list:string"/>
+    <parameter name="maxDelay" type="double" default="0"/>
+    <parameter name="showPicks" type="boolean" default="true"/>
+    <parameter name="filters" type="list:string"/>
+    <parameter name="bufferSize" type="int" default="1800"/>
+    <parameter name="allTracesInitiallyVisible" type="boolean" default="false"/>
+    <group name="streams">
+      <parameter name="codes" type="list:string" default="default"/>
+      <parameter name="sort.mode" type="string" default="object"/>
+    </group>
+  </module>
+</seiscomp>

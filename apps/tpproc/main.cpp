@@ -4,18 +4,20 @@
 // analysis that used to live inside the Qt app.
 
 #include "proc/ProcPipeline.h"
-#include "bus/Bus.h"
-#include "bus/Soh.h"
-#include "bus/Master.h"
+#include "terrapulse/client/application.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
-#include <QDateTime>
+#include <QSet>
+#include <QPair>
 #include <QTimer>
+#include <algorithm>
 #include <cstdio>
 #include <string>
 
-static std::string topicFor(const char* kind, const QVariantMap& m, bool withAxis) {
+namespace {
+
+std::string topicFor(const char* kind, const QVariantMap& m, bool withAxis) {
     std::string t = std::string(kind) + "."
         + std::to_string(m.value("stationId").toUInt()) + "."
         + std::to_string(m.value("objectId").toUInt())  + "."
@@ -25,94 +27,167 @@ static std::string topicFor(const char* kind, const QVariantMap& m, bool withAxi
     return t;
 }
 
+class ProcApplication : public tp::client::Application {
+public:
+    ProcApplication(tp::client::ApplicationSettings settings,
+                    const tp::AnalysisThresholds& thresholds, tp::Config cfg,
+                    int window, int freqWindow)
+        : Application(std::move(settings)), m_thresholds(thresholds),
+          m_cfg(std::move(cfg)), m_window(window), m_freqWindow(freqWindow) {}
+
+    bool init() override {
+        if (!Application::init()) return false;
+
+        m_pipe.setWindowSize(m_window);
+        m_pipe.setFreqWindow(m_freqWindow);
+        m_pipe.setCalibrationWindows(m_cfg.integer("proc.calibrationWindows", 20));
+        m_pipe.setFreqBand(m_cfg.number("proc.freqBandMin", 0.3), m_cfg.number("proc.freqBandMax", 0.0));
+        m_pipe.setStaLta(m_cfg.number("proc.staLta.staAlpha", 0.34),
+                         m_cfg.number("proc.staLta.ltaAlpha", 0.02),
+                         m_cfg.number("proc.staLta.onRatio",  3.0),
+                         m_cfg.number("proc.staLta.offRatio", 1.5));
+        m_pipe.setThresholds(m_thresholds);
+
+        m_pipe.onSaf = [this](const QVariantMap& m) {
+            if (m.value("triggered").toBool()) ++m_trigWindows;
+            m_maxRatio = std::max(m_maxRatio, m.value("staLtaRatio").toDouble());
+            if (m.value("component").toInt() == 0)      // X axis carries the structural tone
+                m_lastFreqX = m.value("dominantFrequency").toDouble();
+            publish(tp::messaging::make(topicFor("saf", m, /*withAxis=*/true), m));
+            ++m_safOut;
+        };
+        m_pipe.onShf = [this](const QVariantMap& m) {
+            publish(tp::messaging::make(topicFor("shf", m, /*withAxis=*/false), m));
+            ++m_shfOut;
+        };
+
+        std::printf("[tpproc] raw <- %s   saf/shf -> broker   window=%d\n",
+                    messagingUrl().toUtf8().constData(), m_pipe.windowSize());
+        std::fflush(stdout);
+        return true;
+    }
+
+    QVariantMap sohCounters() override {
+        QVariantMap c;
+        c["rawIn"]   = static_cast<qulonglong>(m_rawIn);
+        c["windows"] = m_pipe.windowsProcessed();
+        c["saf"]     = static_cast<qulonglong>(m_safOut);
+        c["shf"]     = static_cast<qulonglong>(m_shfOut);
+        return c;
+    }
+
+protected:
+    void handleMessage(const QString& topic, const QVariantMap& h) override {
+        if (!topic.startsWith("raw.")) return;
+
+        // First time we see a sensor, apply its binding profile (if any) so this
+        // structure is judged by its own thresholds.
+        const quint32 hObj = h.value("object").toUInt();
+        const quint32 hSen = h.value("sensor").toUInt();
+        if (!m_pipe.hasThresholdsFor(hObj, hSen) && !m_bound.contains(qMakePair(hObj, hSen))) {
+            m_bound.insert(qMakePair(hObj, hSen));
+            tp::Config bcfg;
+            bcfg.load("tpproc");
+            const QString profile = bcfg.loadBinding("tpproc", hObj, hSen);
+            if (!profile.isEmpty()) {
+                tp::AnalysisThresholds bt = m_thresholds;
+                bt.rmsWarningFactor  = float(bcfg.number("proc.threshold.rmsWarning",  bt.rmsWarningFactor));
+                bt.rmsCriticalFactor = float(bcfg.number("proc.threshold.rmsCritical", bt.rmsCriticalFactor));
+                bt.ampWarning        = float(bcfg.number("proc.threshold.ampWarning",  bt.ampWarning));
+                bt.ampCritical       = float(bcfg.number("proc.threshold.ampCritical", bt.ampCritical));
+                bt.freqShiftWarning  = float(bcfg.number("proc.threshold.freqShiftWarning",  bt.freqShiftWarning));
+                bt.freqShiftCritical = float(bcfg.number("proc.threshold.freqShiftCritical", bt.freqShiftCritical));
+                m_pipe.setThresholdsFor(hObj, hSen, bt);
+                std::printf("[tpproc] binding: object %u sensor %u -> profile '%s'\n",
+                            hObj, hSen, profile.toUtf8().constData());
+                std::fflush(stdout);
+            }
+        }
+
+        m_pipe.addSample(h.value("station").toUInt(), hObj, hSen,
+                         h.value("x").toDouble(),
+                         h.value("y").toDouble(),
+                         h.value("z").toDouble(),
+                         h.value("t").toLongLong(),
+                         h.value("sampleRate").toUInt());
+        ++m_rawIn;
+    }
+
+    void handleSOH() override {
+        std::printf("[tpproc] rawIn=%llu windows=%d saf=%llu shf=%llu trig=%llu maxRatio=%.2f fX=%.2fHz\n",
+                    static_cast<unsigned long long>(m_rawIn),
+                    m_pipe.windowsProcessed(),
+                    static_cast<unsigned long long>(m_safOut),
+                    static_cast<unsigned long long>(m_shfOut),
+                    static_cast<unsigned long long>(m_trigWindows),
+                    m_maxRatio, m_lastFreqX);
+        std::fflush(stdout);
+    }
+
+private:
+    tp::ProcPipeline m_pipe;
+    tp::AnalysisThresholds m_thresholds;
+    tp::Config m_cfg;
+    int m_window, m_freqWindow;
+
+    QSet<QPair<quint32,quint32>> m_bound;   // sensors whose binding we resolved
+    quint64 m_rawIn = 0, m_safOut = 0, m_shfOut = 0, m_trigWindows = 0;
+    double  m_maxRatio = 0.0, m_lastFreqX = 0.0;
+};
+
+} // namespace
+
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName("tpproc");
 
+    // Defaults come from the layered configuration; a command-line flag, if given,
+    // overrides the file value (etc/defaults -> etc -> ~/.terrapulse -> CLI).
+    tp::Config cfg;
+    cfg.load("tpproc");
+
     QCommandLineParser parser;
     parser.setApplicationDescription("TerraPulse processing daemon");
     parser.addHelpOption();
-    QCommandLineOption masterOpt({"m", "master"}, "tpmaster host", "host", "127.0.0.1");
-    QCommandLineOption queueOpt("queue", "Queue: production | playback", "name", "production");
-    QCommandLineOption winOpt("window", "Samples per analysis window", "n", "100");
-    parser.addOptions({masterOpt, queueOpt, winOpt});
+    QCommandLineOption masterOpt({"m", "master"}, "tpmaster host", "host",
+                                 cfg.str("connection.server", "127.0.0.1"));
+    QCommandLineOption queueOpt("queue", "Queue: production | playback", "name",
+                                cfg.str("connection.queue", "production"));
+    QCommandLineOption winOpt("window", "Samples per analysis window", "n",
+                              QString::number(cfg.integer("proc.window", 100)));
+    QCommandLineOption freqWinOpt("freq-window",
+        "Samples used for the natural-frequency estimate (longer = finer resolution)", "n",
+        QString::number(cfg.integer("proc.freqWindow", 1024)));
+    parser.addOptions({masterOpt, queueOpt, winOpt, freqWinOpt});
     parser.process(app);
 
-    const std::string host        = parser.value(masterOpt).toStdString();
-    const auto        queue       = tp::master::queueFromName(parser.value(queueOpt).toStdString());
-    const std::string subEndpoint = tp::master::out(host, queue);  // raw from broker XPUB
-    const std::string pubEndpoint = tp::master::in(host, queue);   // saf/shf to broker XSUB
+    // Detection thresholds and health weights — the engineer-tunable knobs.
+    tp::AnalysisThresholds th;
+    th.rmsWarningFactor    = float(cfg.number("proc.threshold.rmsWarning",     th.rmsWarningFactor));
+    th.rmsCriticalFactor   = float(cfg.number("proc.threshold.rmsCritical",    th.rmsCriticalFactor));
+    th.energyWarningFactor = float(cfg.number("proc.threshold.energyWarning",  th.energyWarningFactor));
+    th.energyCriticalFactor= float(cfg.number("proc.threshold.energyCritical", th.energyCriticalFactor));
+    th.ampWarning          = float(cfg.number("proc.threshold.ampWarning",     th.ampWarning));
+    th.ampCritical         = float(cfg.number("proc.threshold.ampCritical",    th.ampCritical));
+    th.freqShiftWarning    = float(cfg.number("proc.threshold.freqShiftWarning",  th.freqShiftWarning));
+    th.freqShiftCritical   = float(cfg.number("proc.threshold.freqShiftCritical", th.freqShiftCritical));
+    th.healthWarning       = float(cfg.number("proc.threshold.healthWarning",  th.healthWarning));
+    th.healthCritical      = float(cfg.number("proc.threshold.healthCritical", th.healthCritical));
+    th.wRms                = float(cfg.number("proc.health.wRms",    th.wRms));
+    th.wEnergy             = float(cfg.number("proc.health.wEnergy", th.wEnergy));
+    th.wAmp                = float(cfg.number("proc.health.wAmp",    th.wAmp));
+    th.wFreq               = float(cfg.number("proc.health.wFreq",   th.wFreq));
 
-    tp::Publisher  pub(pubEndpoint, /*bind=*/false);         // publish through the broker
-    tp::Subscriber sub(subEndpoint);
-    sub.subscribe("raw.");
+    tp::client::ApplicationSettings settings;
+    settings.moduleName    = "tpproc";
+    settings.masterHost    = parser.value(masterOpt);
+    settings.queue         = parser.value(queueOpt);
+    settings.subscriptions = {"raw."};
+    settings.sohIntervalSeconds = 2;
+    settings.pollIntervalMs = 10;   // raw rate: keep latency low
 
-    tp::ProcPipeline pipe;
-    pipe.setWindowSize(parser.value(winOpt).toInt());
-
-    quint64 safOut = 0, shfOut = 0;
-    pipe.onSaf = [&](const QVariantMap& m) {
-        tp::BusMessage msg;
-        msg.topic  = topicFor("saf", m, /*withAxis=*/true);
-        msg.header = tp::BusMessage::encodeHeader(m);
-        pub.publish(msg);
-        ++safOut;
-    };
-    pipe.onShf = [&](const QVariantMap& m) {
-        tp::BusMessage msg;
-        msg.topic  = topicFor("shf", m, /*withAxis=*/false);
-        msg.header = tp::BusMessage::encodeHeader(m);
-        pub.publish(msg);
-        ++shfOut;
-    };
-
-    quint64 rawIn = 0;
-    QTimer pollTimer;
-    QObject::connect(&pollTimer, &QTimer::timeout, [&]() {
-        for (int i = 0; i < 8000; ++i) {
-            auto m = sub.receive(0);
-            if (!m) break;
-            const QVariantMap h = tp::BusMessage::decodeHeader(m->header);
-            pipe.addSample(h.value("station").toUInt(),
-                           h.value("object").toUInt(),
-                           h.value("sensor").toUInt(),
-                           h.value("x").toDouble(),
-                           h.value("y").toDouble(),
-                           h.value("z").toDouble(),
-                           h.value("t").toLongLong(),
-                           h.value("sampleRate").toUInt());
-            ++rawIn;
-        }
-    });
-    pollTimer.start(5);
-
-    // STATUS heartbeat -> tpmaster/tpmm.
-    const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
-    QTimer heartbeat;
-    QObject::connect(&heartbeat, &QTimer::timeout, [&]() {
-        QVariantMap c;
-        c["rawIn"]   = static_cast<qulonglong>(rawIn);
-        c["windows"] = pipe.windowsProcessed();
-        c["saf"]     = static_cast<qulonglong>(safOut);
-        c["shf"]     = static_cast<qulonglong>(shfOut);
-        pub.publish(tp::sohMessage("tpproc", startMs, c));
-    });
-    heartbeat.start(2000);
-
-    QTimer stats;
-    QObject::connect(&stats, &QTimer::timeout, [&]() {
-        std::printf("[tpproc] rawIn=%llu windows=%d saf=%llu shf=%llu\n",
-                    static_cast<unsigned long long>(rawIn),
-                    pipe.windowsProcessed(),
-                    static_cast<unsigned long long>(safOut),
-                    static_cast<unsigned long long>(shfOut));
-        std::fflush(stdout);
-    });
-    stats.start(2000);
-
-    std::printf("[tpproc] raw <- %s   saf/shf -> %s   window=%d\n",
-                subEndpoint.c_str(), pubEndpoint.c_str(), pipe.windowSize());
-    std::fflush(stdout);
-
-    return app.exec();
+    ProcApplication proc(std::move(settings), th, cfg,
+                         parser.value(winOpt).toInt(),
+                         parser.value(freqWinOpt).toInt());
+    return proc.exec();
 }

@@ -83,14 +83,16 @@ bool forwardData(zmq::socket_t& src, zmq::socket_t& dst, std::string& topic, tp:
     if (store && frames.size() >= 2) {
         const bool isSaf  = topic.rfind("saf.",  0) == 0;
         const bool isShf  = topic.rfind("shf.",  0) == 0;
+        const bool isEvt  = topic.rfind("evt.",  0) == 0;
         const bool isInv  = topic.rfind("inv.",  0) == 0;
         const bool isJrnl = topic.rfind("jrnl.", 0) == 0;
-        if (isSaf || isShf || isInv || isJrnl) {
+        if (isSaf || isShf || isEvt || isInv || isJrnl) {
             QByteArray hb(static_cast<const char*>(frames[1].data()),
                           static_cast<qsizetype>(frames[1].size()));
             const QVariantMap h = tp::BusMessage::decodeHeader(hb);
             if (isSaf)       store->writeSaf(h);
             else if (isShf)  store->writeShf(h);
+            else if (isEvt)  store->writeEvent(h);
             else if (isInv)  store->writeInventory(h);
             else             store->writeJournal(h);
         }
@@ -128,6 +130,12 @@ struct Queue {
           frontend(ctx, zmq::socket_type::xsub),
           backend(ctx, zmq::socket_type::xpub),
           store(s) {
+        frontend.set(zmq::sockopt::linger, 0);
+        backend.set(zmq::sockopt::linger, 0);
+        frontend.set(zmq::sockopt::rcvhwm, 50000);
+        frontend.set(zmq::sockopt::sndhwm, 50000);
+        backend.set(zmq::sockopt::rcvhwm, 50000);
+        backend.set(zmq::sockopt::sndhwm, 50000);
         backend.set(zmq::sockopt::xpub_verbose, 1);
     }
 };
@@ -174,7 +182,7 @@ int main(int argc, char** argv) {
         // so publishers always deliver them — persistence must not depend on some
         // external client happening to be subscribed.
         if (db) {
-            for (const char* p : {"saf.", "shf.", "inv.", "jrnl."}) {
+            for (const char* p : {"saf.", "shf.", "evt.", "inv.", "jrnl."}) {
                 std::string f;
                 f.push_back('\x01');   // ZMQ subscribe frame
                 f += p;
@@ -189,6 +197,7 @@ int main(int argc, char** argv) {
 
     // Control socket (REQ/REP): serves data-model snapshots to thin clients.
     zmq::socket_t ctrl{ctx, zmq::socket_type::rep};
+    ctrl.set(zmq::sockopt::linger, 0);
     try {
         ctrl.bind("tcp://*:" + std::to_string(tp::master::kCtrlPort));
     } catch (const zmq::error_t& e) {
@@ -302,7 +311,7 @@ int main(int argc, char** argv) {
         const auto now = std::chrono::steady_clock::now();
 
         // Periodically re-announce dbstore subscriptions (covers late/reconnected publishers).
-        if (now - lastReinject >= std::chrono::milliseconds{750}) {
+        if (now - lastReinject >= std::chrono::seconds{2}) {
             lastReinject = now;
             for (auto& qp : queues) reinject(*qp);
         }
@@ -322,9 +331,10 @@ int main(int argc, char** argv) {
                                     static_cast<unsigned long long>(q.perGroup[i]));
                 if (q.other) std::printf(" OTHER=%llu", static_cast<unsigned long long>(q.other));
                 if (q.store)
-                    std::printf(" | db saf=%llu ev=%llu inv=%llu jr=%llu",
+                    std::printf(" | db saf=%llu ev=%llu aev=%llu inv=%llu jr=%llu",
                                 static_cast<unsigned long long>(q.store->safRows()),
                                 static_cast<unsigned long long>(q.store->events()),
+                                static_cast<unsigned long long>(q.store->anomalyEvents()),
                                 static_cast<unsigned long long>(q.store->invRows()),
                                 static_cast<unsigned long long>(q.store->journalRows()));
                 std::printf("\n");

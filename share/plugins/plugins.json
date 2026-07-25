@@ -1,0 +1,28 @@
+{
+  "plugins": [
+    {
+      "name": "dbsqlite",
+      "type": "database",
+      "module": "tpmaster",
+      "description": "SQLite storage backend for local TerraPulse deployments"
+    },
+    {
+      "name": "qc_latency",
+      "type": "qc",
+      "module": "tpqc",
+      "description": "Latency quality metric for accelerometer streams"
+    },
+    {
+      "name": "qc_gap",
+      "type": "qc",
+      "module": "tpqc",
+      "description": "Gap/outage quality metric for accelerometer streams"
+    },
+    {
+      "name": "accelerometer_serial",
+      "type": "acquisition",
+      "module": "tpacq",
+      "description": "Serial adapter for TerraPulse accelerometer boards"
+    }
+  ]
+}

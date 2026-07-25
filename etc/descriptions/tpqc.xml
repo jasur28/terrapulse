@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<seiscomp>
+  <module name="tpqc" category="Processing">
+    <description>Data-quality metrics for accelerometer streams.</description>
+    <parameter name="connection.subscriptions" type="list:string"/>
+    <group name="qc">
+      <parameter name="latency.warning" type="double" default="2.0"/>
+      <parameter name="latency.critical" type="double" default="10.0"/>
+      <parameter name="gap.warning" type="int" default="1"/>
+      <parameter name="gap.critical" type="int" default="5"/>
+      <parameter name="spike.thresholdGal" type="double" default="200.0"/>
+      <parameter name="availability.windowSeconds" type="int" default="3600"/>
+    </group>
+  </module>
+</seiscomp>

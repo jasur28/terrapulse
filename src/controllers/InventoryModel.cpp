@@ -49,7 +49,7 @@ void InventoryModel::requestSnapshot(const std::string& ctrlEndpoint, const std:
 
 void InventoryModel::poll() {
     bool any = false;
-    for (int i = 0; i < 4000; ++i) {
+    for (int i = 0; i < 1000; ++i) {
         auto m = m_sub.receive(0);
         if (!m) break;
         const QVariantMap h = tp::BusMessage::decodeHeader(m->header);
@@ -151,17 +151,21 @@ void InventoryModel::rebuild() {
         }
     }
 
+    QMap<quint32, int> sensorCounts;
+    QMap<quint32, int> channelCounts;
+    for (const auto& sv : m_sensors)
+        ++sensorCounts[sv.value("objectId").toUInt()];
+    for (const auto& cv : m_channels)
+        ++channelCounts[cv.value("objectId").toUInt()];
+
     // Per-structure list (inventory + counts + aggregate health/status).
     m_list.clear();
     for (auto it = m_structures.constBegin(); it != m_structures.constEnd(); ++it) {
         const quint32 oid = it.key();
         QVariantMap s = it.value();
 
-        int sc = 0, cc = 0;
-        for (const auto& sv : m_sensors)  if (sv.value("objectId").toUInt() == oid) ++sc;
-        for (const auto& cv : m_channels) if (cv.value("objectId").toUInt() == oid) ++cc;
-        s["sensors"]  = sc;
-        s["channels"] = cc;
+        s["sensors"]  = sensorCounts.value(oid);
+        s["channels"] = channelCounts.value(oid);
 
         const QVariantMap ps = perStruct.value(oid);
         s["hasData"] = ps.contains("health");

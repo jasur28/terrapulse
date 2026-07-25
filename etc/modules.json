@@ -1,0 +1,70 @@
+{
+  "modules": [
+    {
+      "name": "tpmaster",
+      "category": "messaging",
+      "daemon": true,
+      "description": "Central TerraPulse message broker and storage coordinator"
+    },
+    {
+      "name": "tpacq",
+      "category": "acquisition",
+      "daemon": true,
+      "description": "Accelerometer acquisition from serial/network adapters"
+    },
+    {
+      "name": "tpslink",
+      "category": "acquisition",
+      "daemon": true,
+      "description": "SeedLink/miniSEED acquisition bridge"
+    },
+    {
+      "name": "tpproc",
+      "category": "processing",
+      "daemon": true,
+      "description": "Structural-health processing pipeline"
+    },
+    {
+      "name": "tpevent",
+      "category": "processing",
+      "daemon": true,
+      "description": "Structure event association"
+    },
+    {
+      "name": "tpqc",
+      "category": "quality-control",
+      "daemon": true,
+      "description": "Latency, gap, spike and availability metrics"
+    },
+    {
+      "name": "tpmap",
+      "category": "gui",
+      "daemon": false,
+      "description": "Live structure map, inspired by scmv"
+    },
+    {
+      "name": "tpmv",
+      "category": "gui",
+      "daemon": false,
+      "description": "Map view alias for tpmap, inspired by scmv/scmvx"
+    },
+    {
+      "name": "tprttv",
+      "category": "gui",
+      "daemon": false,
+      "description": "Real-time acceleration traces, inspired by scrttv"
+    },
+    {
+      "name": "tpolv",
+      "category": "gui",
+      "daemon": false,
+      "description": "Operator event review, inspired by scolv"
+    },
+    {
+      "name": "tpconfig",
+      "category": "gui",
+      "daemon": false,
+      "description": "Configuration, inventory and bindings editor"
+    }
+  ]
+}

@@ -11,9 +11,13 @@ Item {
 
     // "seiscomp" = offline world relief (world<quad>.png, equirectangular)
     // "osm"      = OpenStreetMap street tiles (z/x/y, Web Mercator)
-    property string provider: "seiscomp"
-    property int osmMinZoom: 8
-    property int osmMaxZoom: 13
+    property string provider: "osm"
+    property int osmMinZoom: 0
+    property int osmMaxZoom: 18
+    property int maxVisibleTiles: 180
+    property bool showLabels: markers.length <= 100
+    property bool drawGrid: true
+    property bool grayscale: false
 
     signal markerClicked(int index)
 
@@ -34,8 +38,8 @@ Item {
         return Math.max(lo, Math.min(hi, v))
     }
 
-    function minSpan() { return control.provider === "osm" ? 0.02 : 8 }
-    function maxSpan() { return control.provider === "osm" ? 1.5 : 360 }
+    function minSpan() { return control.provider === "osm" ? 0.003 : 8 }
+    function maxSpan() { return control.provider === "osm" ? 360 : 360 }
 
     // Web-Mercator helpers (OSM mode).
     function mercN(lat) {                       // normalized Y: 0 = north, 1 = south
@@ -82,13 +86,21 @@ Item {
         if (control.provider === "osm") {
             var z = control.zoomLevel
             var n = Math.pow(2, z)
-            var x1 = Math.floor((vLonMin + 180) / 360 * n)
-            var x2 = Math.floor((vLonMax + 180) / 360 * n)
-            var y1 = Math.floor(control.mercN(vLatMax) * n)   // north => smaller y
-            var y2 = Math.floor(control.mercN(vLatMin) * n)
+            var x1 = control.clamp(Math.floor((vLonMin + 180) / 360 * n), 0, n - 1)
+            var x2 = control.clamp(Math.floor((vLonMax + 180) / 360 * n), 0, n - 1)
+            var y1 = control.clamp(Math.floor(control.mercN(vLatMax) * n), 0, n - 1)
+            var y2 = control.clamp(Math.floor(control.mercN(vLatMin) * n), 0, n - 1)
+            while ((x2 - x1 + 1) * (y2 - y1 + 1) > control.maxVisibleTiles && z > control.osmMinZoom) {
+                z--
+                n = Math.pow(2, z)
+                x1 = control.clamp(Math.floor((vLonMin + 180) / 360 * n), 0, n - 1)
+                x2 = control.clamp(Math.floor((vLonMax + 180) / 360 * n), 0, n - 1)
+                y1 = control.clamp(Math.floor(control.mercN(vLatMax) * n), 0, n - 1)
+                y2 = control.clamp(Math.floor(control.mercN(vLatMin) * n), 0, n - 1)
+            }
+            control.zoomLevel = z
             for (var x = x1; x <= x2; x++) {
                 for (var y = y1; y <= y2; y++) {
-                    if (x < 0 || y < 0 || x >= n || y >= n) continue
                     out.push({
                         src: "/" + z + "/" + x + "/" + y + ".png",
                         lonMin: x / n * 360 - 180,
@@ -129,7 +141,7 @@ Item {
 
         var aspect = width / height
         spanLon = clamp(spanLon, minSpan(), maxSpan())
-        var spanLat = spanLon / aspect
+        var spanLat = spanLon / Math.max(0.1, aspect)
 
         if (spanLat > 180) {
             spanLat = 180
@@ -137,7 +149,11 @@ Item {
         }
 
         centerLon = clamp(centerLon, -180 + spanLon / 2, 180 - spanLon / 2)
-        centerLat = clamp(centerLat, -85 + spanLat / 2, 85 - spanLat / 2)
+        if (spanLat >= 170) {
+            centerLat = 0
+        } else {
+            centerLat = clamp(centerLat, -85 + spanLat / 2, 85 - spanLat / 2)
+        }
 
         vLonMin = centerLon - spanLon / 2
         vLonMax = centerLon + spanLon / 2
@@ -226,13 +242,40 @@ Item {
         return (vLatMax - lat) / (vLatMax - vLatMin) * height
     }
 
+    function markerAt(mx, my) {
+        var best = -1
+        var bestD = 999999
+        var m = control.markers || []
+        for (var i = 0; i < m.length; i++) {
+            var x = control.xOf(Number(m[i].lon))
+            var y = control.yOf(Number(m[i].lat))
+            var d = Math.sqrt((mx - x) * (mx - x) + (my - y) * (my - y))
+            var r = m[i].shape === "event" ? 14 : 11
+            if (d <= r && d < bestD) {
+                best = i
+                bestD = d
+            }
+        }
+        return best
+    }
+
+    function repaintOverlays() {
+        gridCanvas.requestPaint()
+        markerCanvas.requestPaint()
+    }
+
     onMarkersChanged: {
         if (!initialized || (lastCount <= 0 && markers.length > 0)) fit()
         lastCount = markers.length
+        repaintOverlays()
     }
-    onWidthChanged: initialized ? applyView() : fit()
-    onHeightChanged: initialized ? applyView() : fit()
-    Component.onCompleted: fit()
+    onWidthChanged: { initialized ? applyView() : fit(); repaintOverlays() }
+    onHeightChanged: { initialized ? applyView() : fit(); repaintOverlays() }
+    onVLonMinChanged: repaintOverlays()
+    onVLonMaxChanged: repaintOverlays()
+    onVLatMinChanged: repaintOverlays()
+    onVLatMaxChanged: repaintOverlays()
+    Component.onCompleted: { fit(); repaintOverlays() }
 
     Rectangle {
         anchors.fill: parent
@@ -252,6 +295,121 @@ Item {
             smooth: true
             asynchronous: true
             cache: true
+            opacity: control.grayscale ? 0.70 : 1.0
+        }
+    }
+
+    Canvas {
+        id: gridCanvas
+        anchors.fill: parent
+        visible: control.drawGrid
+        z: 2
+
+        onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+            ctx.strokeStyle = "rgba(255,255,255,0.78)"
+            ctx.lineWidth = 1
+            ctx.setLineDash([1, 3])
+            ctx.fillStyle = "rgba(255,255,255,0.95)"
+            ctx.font = "11px sans-serif"
+
+            var lonStep = control.spanLon > 120 ? 30 : control.spanLon > 40 ? 10 : control.spanLon > 10 ? 2 : control.spanLon > 2 ? 0.5 : 0.1
+            var latSpan = control.vLatMax - control.vLatMin
+            var latStep = latSpan > 80 ? 20 : latSpan > 30 ? 10 : latSpan > 8 ? 2 : latSpan > 2 ? 0.5 : 0.1
+
+            var lonStart = Math.ceil(control.vLonMin / lonStep) * lonStep
+            for (var lon = lonStart; lon <= control.vLonMax; lon += lonStep) {
+                var x = control.xOf(lon)
+                ctx.beginPath()
+                ctx.moveTo(x, 0)
+                ctx.lineTo(x, height)
+                ctx.stroke()
+                ctx.fillText(Math.abs(lon).toFixed(lonStep < 1 ? 1 : 0) + (lon < 0 ? " W" : " E"), x + 4, 14)
+            }
+
+            var latStart = Math.ceil(control.vLatMin / latStep) * latStep
+            for (var lat = latStart; lat <= control.vLatMax; lat += latStep) {
+                var y = control.yOf(lat)
+                ctx.beginPath()
+                ctx.moveTo(0, y)
+                ctx.lineTo(width, y)
+                ctx.stroke()
+                ctx.fillText(Math.abs(lat).toFixed(latStep < 1 ? 1 : 0) + (lat < 0 ? " S" : " N"), 5, y - 4)
+            }
+            ctx.setLineDash([])
+        }
+    }
+
+    Canvas {
+        id: markerCanvas
+        anchors.fill: parent
+        z: 5
+
+        onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+            var m = control.markers || []
+            ctx.font = "bold 11px sans-serif"
+            ctx.textBaseline = "middle"
+
+            for (var i = 0; i < m.length; i++) {
+                var marker = m[i]
+                var lon = Number(marker.lon)
+                var lat = Number(marker.lat)
+                if (!isFinite(lon) || !isFinite(lat)) continue
+                if (lon < control.vLonMin || lon > control.vLonMax || lat < control.vLatMin || lat > control.vLatMax) continue
+
+                var x = control.xOf(lon)
+                var y = control.yOf(lat)
+                var color = marker.color || Theme.colorOffline
+                var outline = marker.outline || "#111111"
+                var selected = marker.selected === true || marker.pulse === true
+
+                if (selected) {
+                    ctx.strokeStyle = marker.shape === "event" ? Theme.colorWarning : Theme.colorCritical
+                    ctx.lineWidth = 3
+                    ctx.beginPath()
+                    ctx.arc(x, y, marker.shape === "event" ? 13 : 11, 0, Math.PI * 2)
+                    ctx.stroke()
+                }
+
+                ctx.fillStyle = color
+                ctx.strokeStyle = outline
+                ctx.lineWidth = 1.2
+
+                if (marker.shape === "event") {
+                    ctx.beginPath()
+                    ctx.arc(x, y, 7, 0, Math.PI * 2)
+                    ctx.fill()
+                    ctx.stroke()
+                } else {
+                    ctx.beginPath()
+                    ctx.moveTo(x, y - 9)
+                    ctx.lineTo(x - 8, y + 7)
+                    ctx.lineTo(x + 8, y + 7)
+                    ctx.closePath()
+                    if (marker.shape === "disabled") ctx.fillStyle = "#f2f2f2"
+                    ctx.fill()
+                    ctx.stroke()
+                    if (marker.shape === "disabled") {
+                        ctx.beginPath()
+                        ctx.moveTo(x - 5, y + 5)
+                        ctx.lineTo(x + 5, y - 5)
+                        ctx.stroke()
+                    }
+                }
+
+                if (control.showLabels || marker.alwaysLabel) {
+                    var text = marker.label || ""
+                    ctx.lineWidth = 3
+                    ctx.strokeStyle = "rgba(255,255,255,0.88)"
+                    ctx.fillStyle = "#111111"
+                    ctx.textAlign = "left"
+                    ctx.strokeText(text, x + 10, y + 1)
+                    ctx.fillText(text, x + 10, y + 1)
+                }
+            }
         }
     }
 
@@ -261,87 +419,31 @@ Item {
         property real lastX: 0
         property real lastY: 0
         property bool dragging: false
+        property bool moved: false
         cursorShape: dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
 
         onPressed: (mouse) => {
             lastX = mouse.x
             lastY = mouse.y
             dragging = true
+            moved = false
         }
-        onReleased: dragging = false
+        onReleased: (mouse) => {
+            dragging = false
+            if (!moved) {
+                var hit = control.markerAt(mouse.x, mouse.y)
+                if (hit >= 0) control.markerClicked(hit)
+            }
+        }
         onPositionChanged: (mouse) => {
             if (!dragging) return
+            if (Math.abs(mouse.x - lastX) + Math.abs(mouse.y - lastY) > 2) moved = true
             control.pan(mouse.x - lastX, mouse.y - lastY)
             lastX = mouse.x
             lastY = mouse.y
         }
         onWheel: (wheel) => control.zoomAt(wheel.angleDelta.y, wheel.x, wheel.y)
         onDoubleClicked: control.fit()
-    }
-
-    Repeater {
-        model: control.markers
-
-        delegate: Item {
-            x: control.xOf(Number(modelData.lon)) - 9
-            y: control.yOf(Number(modelData.lat)) - 9
-            width: 18
-            height: 18
-            z: 5
-
-            Rectangle {
-                anchors.centerIn: parent
-                width: 24
-                height: 24
-                radius: 12
-                color: "transparent"
-                border.color: modelData.color
-                border.width: 2
-                visible: modelData.pulse === true
-
-                SequentialAnimation on scale {
-                    running: parent.visible
-                    loops: Animation.Infinite
-                    NumberAnimation { from: 1.0; to: 2.4; duration: 1100; easing.type: Easing.OutQuad }
-                    NumberAnimation { from: 2.4; to: 1.0; duration: 0 }
-                }
-                OpacityAnimator on opacity {
-                    running: parent.visible
-                    loops: Animation.Infinite
-                    from: 0.75
-                    to: 0.0
-                    duration: 1100
-                }
-            }
-
-            Rectangle {
-                anchors.centerIn: parent
-                width: 14
-                height: 14
-                radius: 7
-                color: modelData.color
-                border.color: "#0b1325"
-                border.width: 2
-            }
-
-            Text {
-                anchors {
-                    horizontalCenter: parent.horizontalCenter
-                    top: parent.bottom
-                    topMargin: 2
-                }
-                text: modelData.label !== undefined ? modelData.label : ""
-                color: Theme.textPrimary
-                font.pixelSize: Theme.fontSizeSmall
-                style: Text.Outline
-                styleColor: "#0b1325"
-            }
-
-            MouseArea {
-                anchors.fill: parent
-                onClicked: control.markerClicked(index)
-            }
-        }
     }
 
     Column {

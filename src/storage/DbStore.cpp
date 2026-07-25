@@ -62,6 +62,13 @@ bool DbStore::initSchema() {
         " max_value REAL, growth_rate REAL, trend INTEGER, confidence REAL,"
         " review INTEGER DEFAULT 0)",   // 0=AUTO 1=CONFIRMED 2=REJECTED
 
+        // ── Grouped anomaly events (tpevent) ────────────────────────────────
+        "CREATE TABLE IF NOT EXISTS anomaly_events("
+        " event_id INTEGER PRIMARY KEY,"
+        " object INTEGER, t_start_ms INTEGER, t_end_ms INTEGER,"
+        " status INTEGER, severity INTEGER, anomaly_types TEXT,"
+        " sensor_count INTEGER, shf_count INTEGER, review INTEGER DEFAULT 0)",
+
         // ── Operator journal (audit trail) ──────────────────────────────────
         "CREATE TABLE IF NOT EXISTS journal("
         " id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -133,6 +140,27 @@ void DbStore::writeShf(const QVariantMap& h) {
     m_upsEvent.bindValue(14, h.value("confidenceLevel"));
     m_upsEvent.exec();
     ++m_events;
+}
+
+void DbStore::writeEvent(const QVariantMap& h) {
+    // op=remove closes nothing here (events persist); status carries lifecycle.
+    QSqlQuery q(m_db);
+    q.prepare("INSERT OR REPLACE INTO anomaly_events(event_id,object,t_start_ms,t_end_ms,"
+              "status,severity,anomaly_types,sensor_count,shf_count,review) "
+              "VALUES(?,?,?,?,?,?,?,?,?,COALESCE((SELECT review FROM anomaly_events "
+              "WHERE event_id=?),0))");
+    q.bindValue(0, h.value("eventId"));
+    q.bindValue(1, h.value("objectId"));
+    q.bindValue(2, h.value("tStart"));
+    q.bindValue(3, h.value("tEnd"));
+    q.bindValue(4, h.value("status"));
+    q.bindValue(5, h.value("severity"));
+    q.bindValue(6, h.value("anomalyTypes"));
+    q.bindValue(7, h.value("sensorCount"));
+    q.bindValue(8, h.value("shfCount"));
+    q.bindValue(9, h.value("eventId"));
+    q.exec();
+    ++m_anomalyEvents;
 }
 
 void DbStore::writeInventory(const QVariantMap& h) {

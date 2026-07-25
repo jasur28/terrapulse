@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""
+TerraPulse management command.
+
+Clean-room equivalent of SeisComp's top-level control command. It reads
+etc/modules.json and manages daemon modules from one place.
+"""
+
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+
+def root_dir():
+    env = os.environ.get("TP_ROOT")
+    if env:
+        return Path(env).resolve()
+    return Path(__file__).resolve().parents[1]
+
+
+def load_modules(root):
+    path = root / "etc" / "modules.json"
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("modules", [])
+
+
+def build_dir(root):
+    env = os.environ.get("TP_BUILD")
+    if env:
+        return Path(env).resolve()
+    return root / "build" / "Desktop_Qt_6_9_3_MinGW_64_bit-Debug"
+
+
+def bin_path(root, module):
+    candidates = [
+        build_dir(root) / f"{module}.exe",
+        build_dir(root) / module,
+        root / "bin" / module,
+    ]
+    if module in ("tpmap", "tpmv", "tprttv", "tpolv"):
+        candidates.insert(0, build_dir(root) / "appTerraPulse.exe")
+        candidates.insert(1, build_dir(root) / "appTerraPulse")
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
+
+def pid_dir(root):
+    path = root / "var" / "run"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def log_dir(root):
+    path = root / "var" / "logs"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def pid_file(root, module):
+    return pid_dir(root) / f"{module}.pid"
+
+
+def read_pid(root, module):
+    path = pid_file(root, module)
+    if not path.exists():
+        return None
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except ValueError:
+        return None
+
+
+def is_running(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def daemon_modules(modules):
+    return [m for m in modules if m.get("daemon", False)]
+
+
+def select_modules(modules, names):
+    if not names:
+        return daemon_modules(modules)
+    by_name = {m["name"]: m for m in modules}
+    selected = []
+    for name in names:
+        if name not in by_name:
+            raise SystemExit(f"unknown module: {name}")
+        selected.append(by_name[name])
+    return selected
+
+
+def command_list(root, modules):
+    for m in modules:
+        kind = "daemon" if m.get("daemon") else "gui"
+        print(f"{m['name']:<12} {kind:<7} {m.get('category',''):<16} {m.get('description','')}")
+
+
+def command_check(root, modules):
+    errors = 0
+    for m in modules:
+        exe = bin_path(root, m["name"])
+        if m.get("daemon") and not exe.exists():
+            print(f"! {m['name']}: executable not found: {exe}")
+            errors += 1
+        cfg = root / "etc" / "defaults" / f"{m['name']}.cfg"
+        if not cfg.exists() and m.get("daemon"):
+            print(f"! {m['name']}: default config missing: {cfg}")
+            errors += 1
+    if errors:
+        return 1
+    print("OK")
+    return 0
+
+
+def command_status(root, modules):
+    for m in modules:
+        pid = read_pid(root, m["name"])
+        state = "running" if is_running(pid) else "stopped"
+        suffix = f" pid={pid}" if pid else ""
+        print(f"{m['name']:<12} {state}{suffix}")
+
+
+def start_one(root, module):
+    name = module["name"]
+    if not module.get("daemon"):
+        print(f"{name}: GUI module, use `terrapulse exec {name}`")
+        return
+    pid = read_pid(root, name)
+    if is_running(pid):
+        print(f"{name}: already running pid={pid}")
+        return
+    exe = bin_path(root, name)
+    if not exe.exists():
+        print(f"{name}: executable not found: {exe}")
+        return
+    out = open(log_dir(root) / f"{name}.log", "ab")
+    err = open(log_dir(root) / f"{name}.err", "ab")
+    proc = subprocess.Popen([str(exe)], cwd=str(root), stdout=out, stderr=err)
+    pid_file(root, name).write_text(str(proc.pid), encoding="utf-8")
+    print(f"{name}: started pid={proc.pid}")
+
+
+def stop_one(root, module):
+    name = module["name"]
+    pid = read_pid(root, name)
+    if not is_running(pid):
+        print(f"{name}: stopped")
+        return
+    os.kill(pid, signal.SIGTERM)
+    print(f"{name}: stopping pid={pid}")
+
+
+def exec_one(root, name, args):
+    exe = bin_path(root, name)
+    if not exe.exists():
+        raise SystemExit(f"{name}: executable not found: {exe}")
+    argv = [str(exe)]
+    if name in ("tpmap", "tpmv", "tprttv", "tpolv") and exe.name.startswith("appTerraPulse"):
+        argv += ["--view", name]
+    argv += args
+    os.execv(str(exe), argv)
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(prog="terrapulse")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("list")
+    sub.add_parser("check")
+    sub.add_parser("status")
+    for name in ("start", "stop", "restart"):
+        p = sub.add_parser(name)
+        p.add_argument("modules", nargs="*")
+    p = sub.add_parser("exec")
+    p.add_argument("module")
+    p.add_argument("args", nargs=argparse.REMAINDER)
+
+    ns = parser.parse_args(argv)
+    root = root_dir()
+    modules = load_modules(root)
+
+    if ns.command == "list":
+        command_list(root, modules)
+    elif ns.command == "check":
+        return command_check(root, modules)
+    elif ns.command == "status":
+        command_status(root, modules)
+    elif ns.command == "start":
+        for m in select_modules(modules, ns.modules):
+            start_one(root, m)
+    elif ns.command == "stop":
+        for m in select_modules(modules, ns.modules):
+            stop_one(root, m)
+    elif ns.command == "restart":
+        selected = select_modules(modules, ns.modules)
+        for m in selected:
+            stop_one(root, m)
+        for m in selected:
+            start_one(root, m)
+    elif ns.command == "exec":
+        exec_one(root, ns.module, ns.args)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

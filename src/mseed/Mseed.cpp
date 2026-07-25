@@ -45,7 +45,10 @@ bool encode(const std::string& sid, double sampleRate, int64_t startTimeMs,
 
     SinkCtx ctx{ &sink };
     int64_t packedsamples = 0;
-    int64_t nrec = msr3_pack(msr, recordHandler, &ctx, &packedsamples, MSF_FLUSHDATA, 0);
+    // Pack fixed-length 512-byte miniSEED v2 records: the format SeedLink streams
+    // and SDS archives use, so our files interoperate with third-party tooling.
+    int64_t nrec = msr3_pack(msr, recordHandler, &ctx, &packedsamples,
+                             MSF_FLUSHDATA | MSF_PACKVER2, 0);
 
     msr->datasamples = nullptr;   // owned by the caller
     msr3_free(&msr);

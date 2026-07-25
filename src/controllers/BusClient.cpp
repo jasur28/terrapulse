@@ -20,9 +20,10 @@ BusClient::BusClient(const std::string& endpoint, const std::string& prefix, QOb
 
 void BusClient::poll() {
     bool got = false;
+    QVariantMap latestSample;
 
     // Drain everything currently queued (non-blocking receive).
-    for (int i = 0; i < 4000; ++i) {
+    for (int i = 0; i < 500; ++i) {
         auto m = m_sub.receive(0);
         if (!m) break;
         got = true;
@@ -46,7 +47,7 @@ void BusClient::poll() {
         sample["y"]           = m_lastY;
         sample["z"]           = m_lastZ;
         sample["sequence"]    = h.value("seq");
-        emit sampleReceived(sample);
+        latestSample = sample;
     }
 
     if (got) {
@@ -55,6 +56,10 @@ void BusClient::poll() {
             m_connected = true;
             emit connectedChanged();
         }
+        // QML gets the newest sample per poll tick. Raw archival/review paths
+        // keep full-rate data; the live GUI must stay responsive under load.
+        if (!latestSample.isEmpty())
+            emit sampleReceived(latestSample);
         // Emit aggregate UI notifications once per tick, not per sample.
         emit sampleChanged();
         emit statsChanged();

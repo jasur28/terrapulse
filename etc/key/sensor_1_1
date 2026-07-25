@@ -1,0 +1,4 @@
+# Binding for object 1 / sensor 1 — which modules process it, with which profile.
+# Format: <module>[:<profile>]   (profile file: etc/<module>/profile_<name>.cfg)
+tpproc:highrise
+tpwfparam

@@ -4,9 +4,14 @@ project(TerraPulse VERSION 0.1 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick Charts Core QuickControls2 SerialPort Sql)
+find_package(Qt6 REQUIRED COMPONENTS Quick Charts Core QuickControls2 SerialPort Sql Network Xml)
 
 qt_standard_project_setup(REQUIRES 6.8)
+
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 
 # ── ZeroMQ (fetched + built with the project toolchain) ───────────────────────
 include(FetchContent)
@@ -70,13 +75,36 @@ if(WIN32)
 endif()
 
 # ── tpmseed — our C++ wrapper over libmseed (+ TDS archive) ───────────────────
-add_library(tpmseed STATIC src/mseed/Mseed.cpp src/mseed/TdsArchive.cpp)
+add_library(tpmseed STATIC src/mseed/Mseed.cpp src/mseed/StreamId.cpp src/mseed/TdsArchive.cpp src/mseed/RecordStream.cpp)
 target_include_directories(tpmseed PUBLIC src)
 target_link_libraries(tpmseed PUBLIC libmseed)
 
 # ── mseed_smoke — miniSEED encode/decode roundtrip test (console exe) ──────────
 add_executable(mseed_smoke tools/mseed_smoke.cpp)
 target_link_libraries(mseed_smoke PRIVATE tpmseed)
+
+# ── Unit tests (CTest) ────────────────────────────────────────────────────────
+# First test wired into the build. Layer "save": channel identity — locks the
+# six paper-checked cases from docs/АРХИТЕКТУРА.md §14.
+enable_testing()
+add_executable(test_streamid tests/test_streamid.cpp)
+target_link_libraries(test_streamid PRIVATE tpmseed)
+add_test(NAME streamid COMMAND test_streamid)
+
+# ── tpdump — inspect archived waveforms via a RecordStream URI ─────────────────
+add_executable(tpdump tools/tpdump.cpp)
+target_include_directories(tpdump PRIVATE src)
+target_link_libraries(tpdump PRIVATE tpmseed)
+
+# ── tpcfg — layered configuration (etc/defaults -> etc -> ~/.terrapulse) ──────
+add_library(tpcfg STATIC src/config/Config.cpp src/config/ConfigPlatform.cpp)
+target_include_directories(tpcfg PUBLIC src)
+target_link_libraries(tpcfg PUBLIC Qt6::Core)
+
+# ── tpdumpcfg — print the effective configuration and where it came from ──────
+add_executable(tpdumpcfg tools/tpdumpcfg.cpp)
+target_include_directories(tpdumpcfg PRIVATE src)
+target_link_libraries(tpdumpcfg PRIVATE tpcfg Qt6::Core)
 
 # ── tpbus — ZeroMQ message-bus wrapper ────────────────────────────────────────
 add_library(tpbus STATIC
@@ -90,13 +118,44 @@ target_link_libraries(tpbus PUBLIC Qt6::Core ${TP_ZMQ_TARGET})
 add_executable(tpbus_smoke tools/bus_smoke.cpp)
 target_link_libraries(tpbus_smoke PRIVATE tpbus)
 
+add_library(tpbroker STATIC src/broker/Broker.cpp)
+target_link_libraries(tpbroker PUBLIC tpbus tpcfg Qt6::Core)
+
+add_library(tpclient STATIC src/client/ClientPlatform.cpp)
+target_link_libraries(tpclient PUBLIC tpbroker tpbus tpmseed tpcfg Qt6::Core)
+
+add_library(tpdatamodel STATIC src/datamodel/DataModel.cpp)
+target_link_libraries(tpdatamodel PUBLIC Qt6::Core)
+
+add_library(tpgeo STATIC src/geo/Geo.cpp)
+target_link_libraries(tpgeo PUBLIC Qt6::Core)
+
+add_library(tpio STATIC src/io/IO.cpp)
+target_link_libraries(tpio PUBLIC tpmseed Qt6::Core Qt6::Sql Qt6::Xml)
+
+add_library(tpgui STATIC
+    src/gui/Gui.cpp
+    include/terrapulse/gui/core/recordstreamthread.h
+    include/terrapulse/gui/datamodel/eventdatarepository.h
+    include/terrapulse/gui/datamodel/eventlistview.h
+    include/terrapulse/gui/datamodel/inventorylistview.h
+    include/terrapulse/gui/datamodel/stationdata.h
+)
+target_link_libraries(tpgui PUBLIC tpdatamodel tpgeo tpio Qt6::Core Qt6::Gui)
+
+add_executable(broker_smoke tools/broker_smoke.cpp)
+target_link_libraries(broker_smoke PRIVATE tpbroker Qt6::Core)
+
+add_executable(public_headers_smoke tools/public_headers_smoke.cpp)
+target_link_libraries(public_headers_smoke PRIVATE tp_backend tpclient tpdatamodel tpgeo tpio tpgui tpbroker tpbus tpmseed tpcfg Qt6::Core)
+
 # ── tpacq — acquisition daemon (serial -> bus) ────────────────────────────────
 add_executable(tpacq
     apps/tpacq/main.cpp
     src/serial/SerialStreamReceiver.cpp
 )
 target_include_directories(tpacq PRIVATE src)
-target_link_libraries(tpacq PRIVATE tpbus tpmseed Qt6::Core Qt6::SerialPort)
+target_link_libraries(tpacq PRIVATE tpclient tpbus tpmseed Qt6::Core Qt6::SerialPort tpcfg)
 
 # ── tpmon — bus debug monitor (subscribe + print) ─────────────────────────────
 add_executable(tpmon tools/tpmon.cpp)
@@ -112,12 +171,112 @@ add_executable(tpproc
     src/proc/ProcPipeline.cpp
 )
 target_include_directories(tpproc PRIVATE src)
-target_link_libraries(tpproc PRIVATE tp_backend tpbus Qt6::Core)
+target_link_libraries(tpproc PRIVATE tp_backend tpclient tpbus Qt6::Core tpcfg)
+
+# ── tpevent — group anomalies (shf) into structure-level events (evt) ─────────
+add_executable(tpevent apps/tpevent/main.cpp)
+target_include_directories(tpevent PRIVATE src)
+target_link_libraries(tpevent PRIVATE tpclient tpbus Qt6::Core tpcfg)
+
+# ── tpwfparam — strong-motion params (PGA/PGV/response spectra/JMA) ───────────
+add_executable(tpwfparam apps/tpwfparam/main.cpp)
+target_include_directories(tpwfparam PRIVATE src)
+target_link_libraries(tpwfparam PRIVATE tp_backend tpclient tpbus Qt6::Core tpcfg)
+
+# ── tpqc — data-quality metrics (gaps/latency/spikes/availability) ────────────
+add_executable(tpqc apps/tpqc/main.cpp)
+target_include_directories(tpqc PRIVATE src)
+target_link_libraries(tpqc PRIVATE tpclient tpbus tpcfg Qt6::Core)
+
+# ── tpalert — run an operator command on anomaly events ───────────────────────
+add_executable(tpalert apps/tpalert/main.cpp)
+target_include_directories(tpalert PRIVATE src)
+target_link_libraries(tpalert PRIVATE tpclient tpbus tpcfg Qt6::Core)
+
+# ── tprelay — forward selected groups to another tpmaster (node hierarchy) ────
+add_executable(tprelay apps/tprelay/main.cpp)
+target_include_directories(tprelay PRIVATE src)
+target_link_libraries(tprelay PRIVATE tpclient tpbus tpcfg Qt6::Core)
+
+# ── tpdbstrip — database retention ────────────────────────────────────────────
+add_executable(tpdbstrip tools/tpdbstrip.cpp)
+target_include_directories(tpdbstrip PRIVATE src)
+target_link_libraries(tpdbstrip PRIVATE Qt6::Core Qt6::Sql)
+
+# ── tpdiskmon — disk-space watchdog ───────────────────────────────────────────
+add_executable(tpdiskmon tools/tpdiskmon.cpp)
+target_include_directories(tpdiskmon PRIVATE src)
+target_link_libraries(tpdiskmon PRIVATE tpbus tpcfg Qt6::Core)
+
+# ── tpws — REST/JSON web service + live SSE stream (read-only) ────────────────
+add_executable(tpws apps/tpws/main.cpp)
+target_include_directories(tpws PRIVATE src)
+target_link_libraries(tpws PRIVATE tpclient tpbus tpcfg tpmseed Qt6::Core Qt6::Network Qt6::Sql)
+
+# ── tpevtlog — append each event's evolution to per-event log files ───────────
+add_executable(tpevtlog apps/tpevtlog/main.cpp)
+target_include_directories(tpevtlog PRIVATE src)
+target_link_libraries(tpevtlog PRIVATE tpclient tpbus tpcfg Qt6::Core)
+
+# ── tpevtstreams — streams/time windows contributing to an event ──────────────
+add_executable(tpevtstreams tools/tpevtstreams.cpp)
+target_include_directories(tpevtstreams PRIVATE src)
+target_link_libraries(tpevtstreams PRIVATE Qt6::Core Qt6::Sql)
+
+# ── tpxmldump — export the data model as XML ──────────────────────────────────
+add_executable(tpxmldump tools/tpxmldump.cpp)
+target_include_directories(tpxmldump PRIVATE src)
+target_link_libraries(tpxmldump PRIVATE Qt6::Core Qt6::Sql)
+
+# ── tpquery — named parameterised queries from etc/queries.cfg ────────────────
+add_executable(tpquery tools/tpquery.cpp)
+target_include_directories(tpquery PRIVATE src)
+target_link_libraries(tpquery PRIVATE tpcfg Qt6::Core Qt6::Sql)
+
+# ── tpart — archive check / export / import ───────────────────────────────────
+add_executable(tpart tools/tpart.cpp)
+target_include_directories(tpart PRIVATE src)
+target_link_libraries(tpart PRIVATE tpmseed)
+
+# ── tpreport — operator report (HTML / PDF / KML) ─────────────────────────────
+add_executable(tpreport tools/tpreport.cpp)
+target_include_directories(tpreport PRIVATE src)
+target_link_libraries(tpreport PRIVATE Qt6::Core Qt6::Gui Qt6::Sql)
+
+# ── tphubmon — acquisition status web page ────────────────────────────────────
+add_executable(tphubmon apps/tphubmon/main.cpp)
+target_include_directories(tphubmon PRIVATE src)
+target_link_libraries(tphubmon PRIVATE tpclient tpbus tpcfg Qt6::Core Qt6::Network)
+
+# ── tpconfig — configuration / bindings / inventory editor (GUI) ──────────────
+qt_add_executable(tpconfig
+    apps/tpconfig/main.cpp
+    src/config/ConfigEditor.h
+    src/config/ConfigEditor.cpp
+)
+qt_add_qml_module(tpconfig
+    URI TPConfig
+    VERSION 1.0
+    QML_FILES apps/tpconfig/Main.qml
+)
+target_include_directories(tpconfig PRIVATE src)
+target_link_libraries(tpconfig PRIVATE tpcfg tpbus Qt6::Quick Qt6::QuickControls2 Qt6::Core)
+set_target_properties(tpconfig PROPERTIES WIN32_EXECUTABLE TRUE)
 
 # ── tpstore — storage daemon (saf/shf -> SQLite) ──────────────────────────────
 add_executable(tpstore apps/tpstore/main.cpp)
 target_include_directories(tpstore PRIVATE src)
-target_link_libraries(tpstore PRIVATE tpbus Qt6::Core Qt6::Sql)
+target_link_libraries(tpstore PRIVATE tpclient tpbus Qt6::Core Qt6::Sql)
+
+# ── tpimport — replay archived miniSEED into a queue (like msrtsimul) ─────────
+add_executable(tpimport apps/tpimport/main.cpp)
+target_include_directories(tpimport PRIVATE src)
+target_link_libraries(tpimport PRIVATE tpclient tpbus tpmseed Qt6::Core)
+
+# ── tpslink — SeedLink client (third-party miniSEED -> bus + archive) ─────────
+add_executable(tpslink apps/tpslink/main.cpp)
+target_include_directories(tpslink PRIVATE src)
+target_link_libraries(tpslink PRIVATE tpclient tpbus tpmseed Qt6::Core Qt6::Network)
 
 # ── tpmaster — central message broker (XSUB/XPUB) + embedded dbstore ──────────
 add_executable(tpmaster apps/tpmaster/main.cpp src/storage/DbStore.cpp)
@@ -127,12 +286,12 @@ target_link_libraries(tpmaster PRIVATE tpbus Qt6::Core Qt6::Sql)
 # ── tpinv — inventory tool (JSON -> INVENTORY notifiers) ──────────────────────
 add_executable(tpinv apps/tpinv/main.cpp)
 target_include_directories(tpinv PRIVATE src third_party/nlohmann)
-target_link_libraries(tpinv PRIVATE tpbus Qt6::Core)
+target_link_libraries(tpinv PRIVATE tpclient tpbus Qt6::Core)
 
 # ── tpjournal — operator journal action (-> JOURNAL group) ────────────────────
 add_executable(tpjournal apps/tpjournal/main.cpp)
 target_include_directories(tpjournal PRIVATE src)
-target_link_libraries(tpjournal PRIVATE tpbus Qt6::Core)
+target_link_libraries(tpjournal PRIVATE tpclient tpbus Qt6::Core)
 
 # ── KissFFT ───────────────────────────────────────────────────────────────────
 add_library(kissfft STATIC third_party/kissfft/kiss_fft.c)
@@ -140,19 +299,19 @@ target_include_directories(kissfft PUBLIC third_party/kissfft)
 
 # ── Backend (core + storage + analysis + simulator + history) ─────────────────
 add_library(tp_backend STATIC
+    src/core/CorePlatform.cpp
     src/core/Crc32.cpp
     src/core/SdfRecord.cpp
     src/core/SafRecord.cpp
     src/core/ShfRecord.cpp
-    src/storage/SdfFile.cpp
-    src/storage/SafFile.cpp
-    src/storage/ShfFile.cpp
     src/simulator/SensorSimulator.cpp
     src/analysis/AnalysisEngine.cpp
+    src/analysis/StrongMotion.cpp
+    src/analysis/Spectrum.cpp
     src/history/HistoryEngine.cpp
 )
 target_include_directories(tp_backend PUBLIC src)
-target_link_libraries(tp_backend PUBLIC Qt6::Core)
+target_link_libraries(tp_backend PUBLIC Qt6::Core kissfft)
 
 # ── Main executable ───────────────────────────────────────────────────────────
 qt_add_executable(appTerraPulse
@@ -165,6 +324,8 @@ qt_add_executable(appTerraPulse
     src/controllers/InventoryModel.cpp
     src/controllers/JournalController.h
     src/controllers/JournalController.cpp
+    src/controllers/WaveformService.h
+    src/controllers/WaveformService.cpp
 )
 
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
@@ -175,7 +336,16 @@ qt_add_qml_module(appTerraPulse
     QML_FILES
         Main.qml
         qml/Theme.qml
+        qml/framework/TpGuiApplication.qml
+        qml/apps/TpMapApp.qml
+        qml/apps/TpRttvApp.qml
+        qml/apps/TpOlvApp.qml
+        qml/modules/map/StructureMapWorkbench.qml
+        qml/modules/record/RealTimeTraceWorkbench.qml
+        qml/modules/review/OperatorReviewWorkbench.qml
         qml/components/Panel.qml
+        qml/components/ClassicMenuBar.qml
+        qml/components/ClassicStatusBar.qml
         qml/components/MetricTile.qml
         qml/components/StatusPill.qml
         qml/components/HealthRing.qml
@@ -186,6 +356,9 @@ qt_add_qml_module(appTerraPulse
         qml/components/TraceView.qml
         qml/components/SpectrumPlot.qml
         qml/components/EventReviewPanel.qml
+        qml/components/WaveformReview.qml
+        qml/components/StrongMotionPanel.qml
+        qml/components/ResponseSpectrumPlot.qml
         qml/components/MapView.qml
         qml/pages/DashboardPage.qml
         qml/pages/MonitoringPage.qml
@@ -201,6 +374,7 @@ target_include_directories(appTerraPulse PRIVATE src)
 target_link_libraries(appTerraPulse PRIVATE
     tp_backend
     tpbus
+    tpmseed
     Qt6::Quick
     Qt6::Charts
     Qt6::Core
@@ -215,8 +389,65 @@ set_target_properties(appTerraPulse PROPERTIES
 )
 
 include(GNUInstallDirs)
-install(TARGETS appTerraPulse
+set(TP_RUNTIME_TARGETS
+    appTerraPulse
+    tpconfig
+    tpacq
+    tpalert
+    tpevent
+    tpevtlog
+    tphubmon
+    tpimport
+    tpinv
+    tpjournal
+    tpmaster
+    tpmm
+    tpmon
+    tpproc
+    tpqc
+    tprelay
+    tpslink
+    tpstore
+    tpwfparam
+    tpws
+    tpdump
+    tpdumpcfg
+    tpdbstrip
+    tpdiskmon
+    tpevtstreams
+    tpquery
+    tpreport
+    tpxmldump
+    tpart
+)
+
+install(TARGETS ${TP_RUNTIME_TARGETS}
     BUNDLE DESTINATION .
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+install(DIRECTORY include/terrapulse
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+install(DIRECTORY etc/
+    DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/terrapulse
+)
+
+install(DIRECTORY share/
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/terrapulse
+)
+
+install(PROGRAMS bin/terrapulse
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+if(UNIX AND NOT APPLE)
+    install(CODE "
+        execute_process(COMMAND \${CMAKE_COMMAND} -E create_symlink appTerraPulse \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/tprttv\")
+        execute_process(COMMAND \${CMAKE_COMMAND} -E create_symlink appTerraPulse \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/tpmap\")
+        execute_process(COMMAND \${CMAKE_COMMAND} -E create_symlink appTerraPulse \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/tpmv\")
+        execute_process(COMMAND \${CMAKE_COMMAND} -E create_symlink appTerraPulse \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/tpolv\")
+    ")
+endif()

@@ -1,4 +1,5 @@
 #include "proc/ProcPipeline.h"
+#include "analysis/Spectrum.h"
 
 namespace tp {
 
@@ -49,19 +50,55 @@ void ProcPipeline::flushWindow() {
     for (const auto& a : axes) {
         SdfRecord sdf = makeSdf(a.axis, a.buf);
 
-        // Judge this axis against ITS OWN learned baseline.
-        const uint64_t key = (static_cast<uint64_t>(m_sensor) << 8) | static_cast<uint64_t>(a.axis);
-        BaselineState& b = m_baseline[key];          // default = uncalibrated thresholds
+        // Judge this axis against ITS OWN learned baseline, starting from the
+        // configured thresholds.
+        const uint64_t key = (static_cast<uint64_t>(m_object) << 40)
+                           | (static_cast<uint64_t>(m_sensor) << 8)
+                           | static_cast<uint64_t>(a.axis);
+        auto bIt = m_baseline.find(key);
+        if (bIt == m_baseline.end()) {
+            BaselineState fresh;
+            // A binding profile for this sensor wins over the global thresholds.
+            const auto sIt = m_sensorThresholds.find((uint64_t(m_object) << 32) | m_sensor);
+            fresh.th = sIt != m_sensorThresholds.end() ? sIt->second : m_baseThresholds;
+            bIt = m_baseline.emplace(key, fresh).first;
+        }
+        BaselineState& b = bIt->second;
         m_analysis.setThresholds(b.th);
 
         SafRecord saf = m_analysis.analyse(sdf, m_safCounter++);
+
+        // ── Natural frequency from the long rolling buffer (finer bins) ──
+        auto& fb = m_freqBuf[key];
+        fb.insert(fb.end(), a.buf.begin(), a.buf.end());
+        while (fb.size() > m_freqBufLen) fb.pop_front();
+        if (fb.size() >= 256) {
+            const std::vector<float> fv(fb.begin(), fb.end());
+            const double f = spec::dominantFrequency(fv, m_samplingRate, m_freqMin, m_freqMax);
+            if (f > 0.0) {
+                saf.dominantFrequency = static_cast<float>(f);
+                saf.frequencyShift    = b.th.baselineFreq > 0.0f
+                                          ? static_cast<float>(f) - b.th.baselineFreq : 0.0f;
+            }
+        }
+
+        // ── STA/LTA onset tracking (characteristic function = window RMS) ──
+        TriggerState& tr = m_trigger[key];
+        const double cf = saf.rms;
+        if (!tr.primed) { tr.sta = tr.lta = cf; tr.primed = true; }
+        tr.sta += m_staAlpha * (cf - tr.sta);
+        if (!tr.triggered)                                 // freeze LTA during a trigger
+            tr.lta += m_ltaAlpha * (cf - tr.lta);
+        const double ratio = tr.lta > 1e-9 ? tr.sta / tr.lta : 1.0;
+        if (tr.triggered) { if (ratio < m_offRatio) tr.triggered = false; }
+        else              { if (ratio > m_onRatio)  tr.triggered = true;  }
 
         if (!b.ready) {
             // Calibration period: accumulate the "normal" AC features, don't alarm.
             b.sumRms    += saf.rms;
             b.sumEnergy += saf.energy;
             b.sumFreq   += saf.dominantFrequency;
-            if (++b.count >= kCalibWindows) {
+            if (++b.count >= m_calibWindows) {
                 b.th.baselineRms    = static_cast<float>(b.sumRms    / b.count);
                 b.th.baselineEnergy = static_cast<float>(b.sumEnergy / b.count);
                 b.th.baselineFreq   = static_cast<float>(b.sumFreq   / b.count);
@@ -71,9 +108,24 @@ void ProcPipeline::flushWindow() {
             saf.anomalyType     = AnomalyType::None;
             saf.warningLevel    = WarningLevel::Normal;
             saf.healthIndex     = 1.0f;
+            tr.triggered        = false;                   // no alarms while learning
+        } else if (saf.anomalyDetected && !tr.triggered) {
+            // Energy/vibration onsets must be confirmed by STA/LTA (cuts single-
+            // window false positives). Hard absolute overloads alarm regardless.
+            const bool hardOverload = saf.warningLevel == WarningLevel::Critical &&
+                                      saf.anomalyType  == AnomalyType::Overload;
+            if (!hardOverload) {
+                saf.anomalyDetected = false;
+                saf.anomalyType     = AnomalyType::None;
+                saf.warningLevel    = WarningLevel::Normal;
+                // health left as computed — features still reflect the elevation
+            }
         }
 
-        if (onSaf) onSaf(toVariant(saf));
+        QVariantMap sv = toVariant(saf);
+        sv["staLtaRatio"] = ratio;
+        sv["triggered"]   = tr.triggered;
+        if (onSaf) onSaf(sv);
 
         auto shfOpt = m_history.processSaf(saf);
         if (shfOpt.has_value() && onShf)

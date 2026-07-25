@@ -8,7 +8,7 @@ Item {
 
     property real baseTime: -1
     property real latestRelT: 0
-    property int maxPoints: 1600
+    property int maxPoints: 800
     property real windowSecs: 60
 
     property var ptsX: []
@@ -18,6 +18,7 @@ Item {
     property var spectrum: []
     property real domFreq: 0
     property bool filterEnabled: false
+    property bool traceDirty: false
 
     function streamName() {
         return acq.station + "." + acq.object + "." + acq.sensor
@@ -32,7 +33,7 @@ Item {
 
     function computeSpectrum() {
         var pts = root.ptsX
-        var N = Math.min(128, pts.length)
+        var N = Math.min(64, pts.length)
         if (N < 16) {
             root.spectrum = []
             root.domFreq = 0
@@ -77,18 +78,20 @@ Item {
     }
 
     Timer {
-        interval: 500
-        running: true
+        interval: 1000
+        running: root.visible
         repeat: true
         onTriggered: root.computeSpectrum()
     }
 
-    // Throttle the live trace to ~20 fps instead of the 200 Hz sample rate.
+    // Throttle the live trace to ~12 fps instead of the raw sample rate.
     Timer {
-        interval: 50
-        running: true
+        interval: 80
+        running: root.visible
         repeat: true
         onTriggered: {
+            if (!root.traceDirty) return
+            root.traceDirty = false
             traceView.pointsX = root.ptsX
             traceView.pointsY = root.ptsY
             traceView.pointsZ = root.ptsZ
@@ -96,6 +99,17 @@ Item {
             traceView.requestPaint()
         }
     }
+
+    // Strong-motion parameters from tpwfparam (PGA/PGV/response spectrum/JMA).
+    property real smPga: 0
+    property real smPgv: 0
+    property real smPsaMax: 0
+    property real smPsaPeriod: 0
+    property real smJma: 0
+    property string smScale: "0"
+    property bool  smHasData: false
+    property var   smPsa: []
+    property var   smPeriods: []
 
     Connections {
         target: appController
@@ -105,6 +119,18 @@ Item {
             root.ptsH.push({ t: relT, v: saf.healthIndex })
             root.trimPoints()
             healthPlot.points = root.ptsH
+        }
+
+        function onWfparamReceived(w) {
+            root.smPga = w.pga || 0
+            root.smPgv = w.pgv || 0
+            root.smPsaMax = w.psaMax || 0
+            root.smPsaPeriod = w.psaPeriod || 0
+            root.smJma = w.jma || 0
+            root.smScale = w.jmaScale || "0"
+            root.smPsa = w.psa || []
+            root.smPeriods = w.periods || []
+            root.smHasData = true
         }
     }
 
@@ -132,8 +158,9 @@ Item {
             root.ptsY.push({ t: root.latestRelT, v: sample.y })
             root.ptsZ.push({ t: root.latestRelT, v: sample.z })
             root.trimPoints()
-            // The chart is repainted on a timer (below), NOT per sample — repainting
-            // at the 200 Hz sample rate is what made the UI sluggish.
+            root.traceDirty = true
+            // The chart is repainted on a timer, not per sample. Per-sample
+            // repainting at the raw sample rate makes QML sluggish.
         }
     }
 
@@ -281,6 +308,33 @@ Item {
                         fixedMax: 1
                         bands: true
                         decimals: 2
+                    }
+                }
+
+                // Strong motion: how hard it shook, and at which period it resonates.
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 170
+                    spacing: 12
+
+                    StrongMotionPanel {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        pga: root.smPga
+                        pgv: root.smPgv
+                        psaMax: root.smPsaMax
+                        psaPeriod: root.smPsaPeriod
+                        jma: root.smJma
+                        jmaScale: root.smScale
+                        hasData: root.smHasData
+                    }
+
+                    ResponseSpectrumPlot {
+                        Layout.preferredWidth: 320
+                        Layout.fillHeight: true
+                        periods: root.smPeriods
+                        psa: root.smPsa
+                        peakPeriod: root.smPsaPeriod
                     }
                 }
             }

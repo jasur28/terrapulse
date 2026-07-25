@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<seiscomp>
+  <module name="tpolv" category="GUI">
+    <description>Operator review workspace for TerraPulse anomaly events.</description>
+    <parameter name="connection.subscriptions" type="list:string"/>
+    <parameter name="loadEventDB" type="double" default="1.0"/>
+    <group name="review">
+      <parameter name="loadWaveforms" type="boolean" default="true"/>
+      <parameter name="loadAllComponents" type="boolean" default="true"/>
+      <parameter name="visibleParameters" type="list:string"/>
+      <parameter name="table.visibleColumns" type="list:string"/>
+      <parameter name="systemTray" type="boolean" default="true"/>
+    </group>
+  </module>
+</seiscomp>

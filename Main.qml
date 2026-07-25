@@ -26,12 +26,27 @@ Window {
     ]
     property int currentPage: 0
 
+    function pageForView(v) {
+        if (v === "dashboard" || v === "full") return 0
+        if (v === "tprttv" || v === "scrttv") return 1
+        if (v === "tpmap" || v === "map") return 2
+        if (v === "objects") return 3
+        if (v === "sensors") return 4
+        if (v === "analysis") return 5
+        if (v === "tpolv" || v === "scolv" || v === "events") return 6
+        if (v === "settings") return 7
+        return 0
+    }
+
+    Component.onCompleted: currentPage = pageForView(appView)
+
     RowLayout {
         anchors.fill: parent
         spacing: 0
 
         Rectangle {
-            Layout.preferredWidth: Theme.navWidth
+            visible: !singleView
+            Layout.preferredWidth: singleView ? 0 : Theme.navWidth
             Layout.fillHeight: true
             color: Theme.navBg
 
@@ -127,19 +142,44 @@ Window {
             }
         }
 
-        StackLayout {
+        Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: root.currentPage
 
-            DashboardPage {}
-            MonitoringPage {}
-            MapPage {}
-            ObjectsPage {}
-            SensorsPage {}
-            AnalysisPage {}
-            EventsPage {}
-            SettingsPage {}
+            Loader {
+                anchors.fill: parent
+                asynchronous: true
+                sourceComponent: {
+                    if (singleView) {
+                        if (appView === "tpmap" || appView === "map") return tpmapAppComponent
+                        if (appView === "tprttv" || appView === "scrttv") return tprttvAppComponent
+                        if (appView === "tpolv" || appView === "scolv") return tpolvAppComponent
+                    }
+                    switch (root.currentPage) {
+                    case 0: return dashboardComponent
+                    case 1: return monitoringComponent
+                    case 2: return mapComponent
+                    case 3: return objectsComponent
+                    case 4: return sensorsComponent
+                    case 5: return analysisComponent
+                    case 6: return eventsComponent
+                    case 7: return settingsComponent
+                    default: return dashboardComponent
+                    }
+                }
+            }
         }
     }
+
+    Component { id: dashboardComponent; DashboardPage {} }
+    Component { id: monitoringComponent; MonitoringPage {} }
+    Component { id: mapComponent; MapPage {} }
+    Component { id: objectsComponent; ObjectsPage {} }
+    Component { id: sensorsComponent; SensorsPage {} }
+    Component { id: analysisComponent; AnalysisPage {} }
+    Component { id: eventsComponent; EventsPage {} }
+    Component { id: settingsComponent; SettingsPage {} }
+    Component { id: tpmapAppComponent; TpMapApp {} }
+    Component { id: tprttvAppComponent; TpRttvApp {} }
+    Component { id: tpolvAppComponent; TpOlvApp {} }
 }

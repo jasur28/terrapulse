@@ -15,10 +15,13 @@ struct Group {
     std::string_view desc;    // human description
 };
 
-inline constexpr std::array<Group, 7> kAll = {{
+inline constexpr std::array<Group, 10> kAll = {{
     { "WAVEFORM",  "raw.",  "Raw acceleration samples          (tpacq -> ...)" },
     { "FEATURE",   "saf.",  "Analysis feature sets / SAF       (tpproc -> ...)" },
+    { "WFPARAM",   "wfp.",  "Strong-motion params PGA/PGV/JMA  (tpwfparam -> ...)" },
     { "ANOMALY",   "shf.",  "Anomaly & history events / SHF    (tpproc -> ...)" },
+    { "EVENT",     "evt.",  "Grouped anomaly events            (tpevent -> ...)" },
+    { "QC",        "qc.",   "Data-quality metrics              (tpqc -> ...)" },
     { "STATUS",    "soh.",  "State-of-health / heartbeats      (all modules)" },
     { "CONFIG",    "cfg.",  "Configuration updates             (control -> ...)" },
     { "INVENTORY", "inv.",  "Inventory notifiers               (structures/sensors/channels)" },

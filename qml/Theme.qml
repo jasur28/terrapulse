@@ -2,30 +2,30 @@ pragma Singleton
 import QtQuick
 
 QtObject {
-    // Backgrounds
-    readonly property color background:  "#151820"
-    readonly property color surface:     "#1D222C"
-    readonly property color surfaceAlt:  "#242B36"
-    readonly property color navBg:       "#0F131A"
-    readonly property color accent:      "#14324A"
-    readonly property color border:      "#343C48"
+    // Classic Qt/SeisComp-like workbench colors.
+    readonly property color background:  "#d6d6d6"
+    readonly property color surface:     "#efefef"
+    readonly property color surfaceAlt:  "#ffffff"
+    readonly property color navBg:       "#c8c8c8"
+    readonly property color accent:      "#3b6ea5"
+    readonly property color border:      "#8f8f8f"
 
     // Text
-    readonly property color textPrimary:   "#E0E0E0"
-    readonly property color textSecondary: "#A0A0A0"
+    readonly property color textPrimary:   "#101010"
+    readonly property color textSecondary: "#4f4f4f"
 
     // Status colors
     readonly property color colorNormal:   "#00C853"
     readonly property color colorWarning:  "#FFD600"
     readonly property color colorCritical: "#FF1744"
     readonly property color colorOffline:  "#616161"
-    readonly property color colorService:  "#00E5FF"
-    readonly property color colorHigh:     "#FF6D00"
+    readonly property color colorService:  "#0057a8"
+    readonly property color colorHigh:     "#ff8c00"
 
     // Chart series
-    readonly property color seriesX: "#FF4081"
-    readonly property color seriesY: "#00E5FF"
-    readonly property color seriesZ: "#69F0AE"
+    readonly property color seriesX: "#d7191c"
+    readonly property color seriesY: "#2c7bb6"
+    readonly property color seriesZ: "#1a9641"
 
     // Typography
     readonly property int fontSizeSmall:  11

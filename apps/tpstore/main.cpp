@@ -2,22 +2,22 @@
 // Subscribes to SAF/SHF results and persists them to SQLite: a time-series index
 // of analysis results, a one-row-per-event table, and per-sensor latest state.
 // No GUI. (Raw/SDF binary archival can be added later.)
+//
+// This is the standalone SQLite writer, an alternative to tpmaster's embedded
+// dbstore for topologies that keep storage as its own process.
 
-#include "bus/Bus.h"
-#include "bus/Soh.h"
-#include "bus/Master.h"
+#include "terrapulse/client/application.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
-#include <QDateTime>
-#include <QTimer>
 #include <QtSql/QSqlDatabase>
 #include <QtSql/QSqlQuery>
 #include <QtSql/QSqlError>
-#include <QVariantMap>
 #include <cstdio>
 
-static bool initSchema(QSqlDatabase& db) {
+namespace {
+
+bool initSchema(QSqlDatabase& db) {
     QSqlQuery q(db);
     // Single-file journal so the .db is always self-contained (easy to inspect).
     // DELETE also merges any pre-existing WAL sidecar back into the main file.
@@ -55,6 +55,121 @@ static bool initSchema(QSqlDatabase& db) {
     return true;
 }
 
+class StoreApplication : public tp::client::Application {
+public:
+    StoreApplication(tp::client::ApplicationSettings settings, QString dbPath)
+        : Application(std::move(settings)), m_dbPath(std::move(dbPath)) {}
+
+    bool init() override {
+        m_db = QSqlDatabase::addDatabase("QSQLITE");
+        m_db.setDatabaseName(m_dbPath);
+        if (!m_db.open()) {
+            std::fprintf(stderr, "[tpstore] cannot open db '%s': %s\n",
+                         m_dbPath.toUtf8().constData(),
+                         m_db.lastError().text().toUtf8().constData());
+            return false;
+        }
+        if (!initSchema(m_db)) return false;
+
+        m_insSaf = QSqlQuery(m_db);
+        m_insSaf.prepare(
+            "INSERT INTO saf_index(station,object,sensor,axis,t_ms,rms,max_amp,dom_freq,"
+            "health,anomaly_type,warning,confidence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
+        m_insSensor = QSqlQuery(m_db);
+        m_insSensor.prepare(
+            "INSERT INTO sensors(station,object,sensor,last_seen_ms,last_health,last_warning) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(station,object,sensor) DO UPDATE SET "
+            "last_seen_ms=excluded.last_seen_ms, last_health=excluded.last_health, "
+            "last_warning=excluded.last_warning");
+        m_upsEvent = QSqlQuery(m_db);
+        m_upsEvent.prepare(
+            "INSERT OR REPLACE INTO events(shf_id,station,object,sensor,axis,type,severity,"
+            "status,t_start_ms,t_end_ms,duration_s,max_value,growth_rate,trend,confidence) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+
+        if (!Application::init()) return false;
+
+        std::printf("[tpstore] saf/shf <- %s   db=%s\n",
+                    messagingUrl().toUtf8().constData(), m_dbPath.toUtf8().constData());
+        std::fflush(stdout);
+        return true;
+    }
+
+    QVariantMap sohCounters() override {
+        QVariantMap c;
+        c["saf_rows"] = static_cast<qulonglong>(m_safRows);
+        c["events"]   = static_cast<qulonglong>(m_eventRows);
+        return c;
+    }
+
+protected:
+    // One SQLite transaction per drained batch — the same batching the poll loop
+    // used before, now driven by the platform.
+    void beforeBatch() override { m_db.transaction(); }
+    void afterBatch()  override { m_db.commit(); }
+
+    void handleMessage(const QString& topic, const QVariantMap& h) override {
+        if (topic.startsWith("saf.")) {
+            m_insSaf.bindValue(0,  h.value("stationId"));
+            m_insSaf.bindValue(1,  h.value("objectId"));
+            m_insSaf.bindValue(2,  h.value("sensorId"));
+            m_insSaf.bindValue(3,  h.value("component"));
+            m_insSaf.bindValue(4,  h.value("timestamp"));
+            m_insSaf.bindValue(5,  h.value("rms"));
+            m_insSaf.bindValue(6,  h.value("maxAmplitude"));
+            m_insSaf.bindValue(7,  h.value("dominantFrequency"));
+            m_insSaf.bindValue(8,  h.value("healthIndex"));
+            m_insSaf.bindValue(9,  h.value("anomalyType"));
+            m_insSaf.bindValue(10, h.value("warningLevel"));
+            m_insSaf.bindValue(11, h.value("confidenceLevel"));
+            m_insSaf.exec();
+            ++m_safRows;
+
+            m_insSensor.bindValue(0, h.value("stationId"));
+            m_insSensor.bindValue(1, h.value("objectId"));
+            m_insSensor.bindValue(2, h.value("sensorId"));
+            m_insSensor.bindValue(3, h.value("timestamp"));
+            m_insSensor.bindValue(4, h.value("healthIndex"));
+            m_insSensor.bindValue(5, h.value("warningLevel"));
+            m_insSensor.exec();
+        } else if (topic.startsWith("shf.")) {
+            m_upsEvent.bindValue(0,  h.value("shfId"));
+            m_upsEvent.bindValue(1,  h.value("stationId"));
+            m_upsEvent.bindValue(2,  h.value("objectId"));
+            m_upsEvent.bindValue(3,  h.value("sensorId"));
+            m_upsEvent.bindValue(4,  h.value("component"));
+            m_upsEvent.bindValue(5,  h.value("anomalyType"));
+            m_upsEvent.bindValue(6,  h.value("severityLevel"));
+            m_upsEvent.bindValue(7,  h.value("anomalyStatus"));
+            m_upsEvent.bindValue(8,  h.value("anomalyStartTime"));
+            m_upsEvent.bindValue(9,  h.value("anomalyEndTime"));
+            m_upsEvent.bindValue(10, h.value("anomalyDuration"));
+            m_upsEvent.bindValue(11, h.value("maxValue"));
+            m_upsEvent.bindValue(12, h.value("growthRate"));
+            m_upsEvent.bindValue(13, h.value("trend"));
+            m_upsEvent.bindValue(14, h.value("confidenceLevel"));
+            m_upsEvent.exec();
+            ++m_eventRows;
+        }
+    }
+
+    void handleSOH() override {
+        std::printf("[tpstore] saf_rows=%llu events=%llu  db=%s\n",
+                    static_cast<unsigned long long>(m_safRows),
+                    static_cast<unsigned long long>(m_eventRows),
+                    m_dbPath.toUtf8().constData());
+        std::fflush(stdout);
+    }
+
+private:
+    QString m_dbPath;
+    QSqlDatabase m_db;
+    QSqlQuery m_insSaf, m_insSensor, m_upsEvent;
+    quint64 m_safRows = 0, m_eventRows = 0;
+};
+
+} // namespace
+
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
     QCoreApplication::setApplicationName("tpstore");
@@ -62,128 +177,18 @@ int main(int argc, char* argv[]) {
     QCommandLineParser parser;
     parser.setApplicationDescription("TerraPulse storage daemon");
     parser.addHelpOption();
-    QCommandLineOption masterOpt({"m", "master"}, "tpmaster host (saf/shf <- <host>:5562, SOH -> <host>:5561)", "host", "127.0.0.1");
-    QCommandLineOption dbOpt ({"d", "db"},  "SQLite database path",   "path",     "terrapulse.db");
+    QCommandLineOption masterOpt({"m", "master"}, "tpmaster host", "host", "127.0.0.1");
+    QCommandLineOption dbOpt({"d", "db"}, "SQLite database path", "path", "terrapulse.db");
     parser.addOptions({masterOpt, dbOpt});
     parser.process(app);
 
-    QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE");
-    db.setDatabaseName(parser.value(dbOpt));
-    if (!db.open()) {
-        std::fprintf(stderr, "[tpstore] cannot open db '%s': %s\n",
-                     parser.value(dbOpt).toUtf8().constData(),
-                     db.lastError().text().toUtf8().constData());
-        return 1;
-    }
-    if (!initSchema(db)) return 1;
+    tp::client::ApplicationSettings settings;
+    settings.moduleName    = "tpstore";
+    settings.masterHost    = parser.value(masterOpt);
+    settings.queue         = "production";
+    settings.subscriptions = {"saf.", "shf."};
+    settings.sohIntervalSeconds = 2;
 
-    QSqlQuery insSaf(db), insSensor(db), upsEvent(db);
-    insSaf.prepare(
-        "INSERT INTO saf_index(station,object,sensor,axis,t_ms,rms,max_amp,dom_freq,"
-        "health,anomaly_type,warning,confidence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
-    insSensor.prepare(
-        "INSERT INTO sensors(station,object,sensor,last_seen_ms,last_health,last_warning) "
-        "VALUES(?,?,?,?,?,?) ON CONFLICT(station,object,sensor) DO UPDATE SET "
-        "last_seen_ms=excluded.last_seen_ms, last_health=excluded.last_health, "
-        "last_warning=excluded.last_warning");
-    upsEvent.prepare(
-        "INSERT OR REPLACE INTO events(shf_id,station,object,sensor,axis,type,severity,"
-        "status,t_start_ms,t_end_ms,duration_s,max_value,growth_rate,trend,confidence) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
-
-    const std::string host = parser.value(masterOpt).toStdString();
-    tp::Subscriber sub(tp::master::out(host));   // results from broker XPUB
-    sub.subscribe("saf.");
-    sub.subscribe("shf.");
-
-    // STATUS heartbeat -> tpmaster/tpmm (tpstore only subscribes for data, so it
-    // opens a small connect-mode publisher just for SOH on the broker XSUB).
-    tp::Publisher  sohPub(tp::master::in(host), /*bind=*/false);
-    const qint64   startMs = QDateTime::currentMSecsSinceEpoch();
-
-    quint64 safRows = 0, eventRows = 0;
-
-    QTimer pollTimer;
-    QObject::connect(&pollTimer, &QTimer::timeout, [&]() {
-        bool any = false;
-        db.transaction();
-        for (int i = 0; i < 4000; ++i) {
-            auto m = sub.receive(0);
-            if (!m) break;
-            any = true;
-            const QVariantMap h = tp::BusMessage::decodeHeader(m->header);
-
-            if (m->topic.rfind("saf.", 0) == 0) {
-                insSaf.bindValue(0,  h.value("stationId"));
-                insSaf.bindValue(1,  h.value("objectId"));
-                insSaf.bindValue(2,  h.value("sensorId"));
-                insSaf.bindValue(3,  h.value("component"));
-                insSaf.bindValue(4,  h.value("timestamp"));
-                insSaf.bindValue(5,  h.value("rms"));
-                insSaf.bindValue(6,  h.value("maxAmplitude"));
-                insSaf.bindValue(7,  h.value("dominantFrequency"));
-                insSaf.bindValue(8,  h.value("healthIndex"));
-                insSaf.bindValue(9,  h.value("anomalyType"));
-                insSaf.bindValue(10, h.value("warningLevel"));
-                insSaf.bindValue(11, h.value("confidenceLevel"));
-                insSaf.exec();
-                ++safRows;
-
-                insSensor.bindValue(0, h.value("stationId"));
-                insSensor.bindValue(1, h.value("objectId"));
-                insSensor.bindValue(2, h.value("sensorId"));
-                insSensor.bindValue(3, h.value("timestamp"));
-                insSensor.bindValue(4, h.value("healthIndex"));
-                insSensor.bindValue(5, h.value("warningLevel"));
-                insSensor.exec();
-            } else if (m->topic.rfind("shf.", 0) == 0) {
-                upsEvent.bindValue(0,  h.value("shfId"));
-                upsEvent.bindValue(1,  h.value("stationId"));
-                upsEvent.bindValue(2,  h.value("objectId"));
-                upsEvent.bindValue(3,  h.value("sensorId"));
-                upsEvent.bindValue(4,  h.value("component"));
-                upsEvent.bindValue(5,  h.value("anomalyType"));
-                upsEvent.bindValue(6,  h.value("severityLevel"));
-                upsEvent.bindValue(7,  h.value("anomalyStatus"));
-                upsEvent.bindValue(8,  h.value("anomalyStartTime"));
-                upsEvent.bindValue(9,  h.value("anomalyEndTime"));
-                upsEvent.bindValue(10, h.value("anomalyDuration"));
-                upsEvent.bindValue(11, h.value("maxValue"));
-                upsEvent.bindValue(12, h.value("growthRate"));
-                upsEvent.bindValue(13, h.value("trend"));
-                upsEvent.bindValue(14, h.value("confidenceLevel"));
-                upsEvent.exec();
-                ++eventRows;
-            }
-        }
-        db.commit();
-        if (!any) { /* nothing this tick */ }
-    });
-    pollTimer.start(50);
-
-    QTimer heartbeat;
-    QObject::connect(&heartbeat, &QTimer::timeout, [&]() {
-        QVariantMap c;
-        c["saf_rows"] = static_cast<qulonglong>(safRows);
-        c["events"]   = static_cast<qulonglong>(eventRows);
-        sohPub.publish(tp::sohMessage("tpstore", startMs, c));
-    });
-    heartbeat.start(2000);
-
-    QTimer stats;
-    QObject::connect(&stats, &QTimer::timeout, [&]() {
-        std::printf("[tpstore] saf_rows=%llu events=%llu  db=%s\n",
-                    static_cast<unsigned long long>(safRows),
-                    static_cast<unsigned long long>(eventRows),
-                    parser.value(dbOpt).toUtf8().constData());
-        std::fflush(stdout);
-    });
-    stats.start(2000);
-
-    std::printf("[tpstore] saf/shf <- %s   db=%s\n",
-                tp::master::out(host).c_str(),
-                parser.value(dbOpt).toUtf8().constData());
-    std::fflush(stdout);
-
-    return app.exec();
+    StoreApplication store(std::move(settings), parser.value(dbOpt));
+    return store.exec();
 }

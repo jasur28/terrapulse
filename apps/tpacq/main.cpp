@@ -5,28 +5,253 @@
 //
 // --sim: no hardware needed — generates a synthetic waveform (structural sine +
 // noise) at --rate Hz. Handy for pipeline/broker tests and demos.
+//
+// The UART parsing lives untouched in SerialStreamReceiver (CRC-16/CCITT,
+// 43-byte packets, DTR/RTS reset pulse); this file only wires it to the bus.
 
 #include "serial/SerialStreamReceiver.h"
-#include "bus/Bus.h"
-#include "bus/Soh.h"
-#include "bus/Master.h"
 #include "mseed/TdsArchive.h"
+#include "terrapulse/client/application.h"
 
 #include <QCoreApplication>
-#include <memory>
 #include <QCommandLineParser>
 #include <QDateTime>
 #include <QFile>
 #include <QStringList>
 #include <QTextStream>
 #include <QTimer>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <vector>
 
-namespace { struct Rec { qint64 t; double x, y, z; }; }
+namespace {
+
+struct Rec { qint64 t; double x, y, z; };
+
+struct Config {
+    quint32 station = 1, object = 1, sensor = 1;
+    quint32 simRate = 200;
+    bool    useSim = false, simEvents = false;
+    bool    useReplay = false, historic = false;
+    double  speed = 1.0;
+    int     baud = 460800;
+    QString port, replayFile, recordFile, archiveDir;
+    bool    record = false, archive = false;
+};
+
+class AcqApplication : public tp::client::Application {
+public:
+    AcqApplication(tp::client::ApplicationSettings settings, Config cfg)
+        : Application(std::move(settings)), m_cfg(std::move(cfg)),
+          m_topic("raw." + std::to_string(m_cfg.station) + "." + std::to_string(m_cfg.object)
+                        + "." + std::to_string(m_cfg.sensor)) {}
+
+    bool init() override {
+        if (!Application::init()) return false;    // publisher (+ store-forward) ready
+
+        if (m_cfg.record) {
+            m_recFile.setFileName(m_cfg.recordFile);
+            if (m_recFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+                m_recOut.setDevice(&m_recFile);
+            else
+                std::printf("[tpacq] cannot open --record file '%s'\n",
+                            m_cfg.recordFile.toUtf8().constData());
+        }
+        if (m_cfg.archive)
+            m_tds = std::make_unique<tp::mseed::TdsArchive>(m_cfg.archiveDir.toStdString());
+
+        m_serial.setBaudRate(m_cfg.baud);
+        QObject::connect(&m_serial, &SerialStreamReceiver::sampleReceived,
+                         [this](const QVariantMap& s) {
+            publishSample(s.value("timestampMs").toLongLong(),
+                          s.value("x").toDouble(), s.value("y").toDouble(), s.value("z").toDouble(),
+                          s.value("sequence").toULongLong(), s.value("sampleRate").toUInt());
+        });
+
+        if (m_cfg.useSim)         startSim();
+        else if (m_cfg.useReplay) startReplay();
+
+        QObject::connect(&m_statsTimer, &QTimer::timeout, [this]() { printStats(); });
+        m_statsTimer.start(2000);
+
+        announce();
+        return true;
+    }
+
+    QVariantMap sohCounters() override {
+        QVariantMap c;
+        c["published"] = static_cast<qulonglong>(m_published);
+        c["packets"]   = static_cast<qulonglong>(m_serial.packetCount());
+        c["bad"]       = static_cast<qulonglong>(m_serial.badPacketCount());
+        c["src"]       = srcLabel();
+        c["queue"]     = settings().queue;
+        return c;
+    }
+
+private:
+    const char* srcLabel() const {
+        return m_cfg.useReplay ? "replay" : m_cfg.useSim ? "sim" : "serial";
+    }
+
+    // Single publish path shared by every source.
+    void publishSample(qint64 t, double x, double y, double z, quint64 seq, quint32 rate) {
+        if (m_recOut.device())
+            m_recOut << t << ',' << x << ',' << y << ',' << z << '\n';
+        if (m_tds) {                       // gal -> integer counts (x10000), 3 axes
+            m_tds->addSample(m_cfg.object, m_cfg.sensor, 0, static_cast<int32_t>(std::lround(x * 10000.0)), t, rate);
+            m_tds->addSample(m_cfg.object, m_cfg.sensor, 1, static_cast<int32_t>(std::lround(y * 10000.0)), t, rate);
+            m_tds->addSample(m_cfg.object, m_cfg.sensor, 2, static_cast<int32_t>(std::lround(z * 10000.0)), t, rate);
+        }
+        QVariantMap h;
+        h["v"]          = 1;
+        h["type"]       = "raw";
+        h["station"]    = m_cfg.station;
+        h["object"]     = m_cfg.object;
+        h["sensor"]     = m_cfg.sensor;
+        h["t"]          = static_cast<qlonglong>(t);
+        h["x"]          = x;
+        h["y"]          = y;
+        h["z"]          = z;
+        h["seq"]        = static_cast<qulonglong>(seq);
+        h["sampleRate"] = rate;
+        publish(m_topic, h);               // payload empty: sample fits in the header
+        ++m_published;
+    }
+
+    // ── Synthetic source (--sim) ─────────────────────────────────────────────
+    void startSim() {
+        const int tickMs  = 10;
+        const int perTick = std::max(1, int(m_cfg.simRate) * tickMs / 1000);
+        const double f    = 3.1;                                    // structural tone (Hz)
+        const double dph  = 2.0 * M_PI * f / double(m_cfg.simRate);
+        QObject::connect(&m_simTimer, &QTimer::timeout, [this, perTick, dph]() {
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            // --sim-events: every 20 s a ~3 s burst at ~10x amplitude trips an anomaly.
+            const double amp = (m_cfg.simEvents && (now / 1000) % 20 < 3) ? 10.0 : 1.0;
+            // Emit every sample that is DUE, tracked by a time cursor rather than a
+            // fixed count per tick: the timer jitters, so a fixed count would leave
+            // holes in the stream (QC saw them as gaps and availability < 100%).
+            const double dtMs = 1000.0 / double(m_cfg.simRate);
+            if (m_nextTs <= 0.0) m_nextTs = double(now);
+            if (double(now) - m_nextTs > 2000.0) m_nextTs = double(now);   // resync after a stall
+            int emitted = 0;
+            const int maxPerTick = perTick * 20;                           // bound the catch-up
+            while (m_nextTs <= double(now) && emitted < maxPerTick) {
+                const qint64 ts = qint64(std::llround(m_nextTs));
+                const double n = double(std::rand() % 1000 - 500) / 1000.0; // +/-0.5 noise
+                const double x = amp * (5.0 * std::sin(m_ph)       + 0.8 * n);
+                const double y = amp * (4.0 * std::sin(m_ph + 1.7) + 0.8 * n);
+                const double z = 1000.0 + amp * (2.0 * std::sin(m_ph) + 0.5 * n); // ~1g bias on Z
+                publishSample(ts, x, y, z, ++m_seq, m_cfg.simRate);
+                m_ph += dph;
+                if (m_ph > 2.0 * M_PI) m_ph -= 2.0 * M_PI;
+                m_nextTs += dtMs;
+                ++emitted;
+            }
+        });
+        m_simTimer.start(tickMs);
+    }
+
+    // ── Replay source (--replay file) ────────────────────────────────────────
+    void startReplay() {
+        QFile f(m_cfg.replayFile);
+        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream in(&f);
+            while (!in.atEnd()) {
+                const QStringList p = in.readLine().split(',');
+                if (p.size() >= 4)
+                    m_recs.push_back({ p[0].toLongLong(), p[1].toDouble(), p[2].toDouble(), p[3].toDouble() });
+            }
+        }
+        const quint32 rate    = std::max(1u, m_cfg.simRate);
+        const int     tickMs  = 10;
+        const int     perTick = std::max(1, int(std::llround(rate * m_cfg.speed * tickMs / 1000.0)));
+        QObject::connect(&m_replayTimer, &QTimer::timeout, [this, perTick, rate]() {
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            for (int i = 0; i < perTick && m_idx < m_recs.size(); ++i, ++m_idx) {
+                const Rec& r = m_recs[m_idx];
+                publishSample(m_cfg.historic ? r.t : now, r.x, r.y, r.z, ++m_seq, rate);
+            }
+            if (m_idx >= m_recs.size()) {
+                std::printf("[tpacq] replay done (%zu samples)\n", m_recs.size());
+                std::fflush(stdout);
+                m_replayTimer.stop();
+            }
+        });
+        // Start after a short delay so subscribers connect first (PUB/SUB slow-joiner);
+        // a one-shot replay burst could otherwise finish before subscriptions propagate.
+        QTimer::singleShot(1300, [this, tickMs]() { m_replayTimer.start(tickMs); });
+    }
+
+    void printStats() {
+        if (m_recOut.device()) m_recOut.flush();
+        if (m_tds) m_tds->flushAll();
+        if (m_cfg.useSim || m_cfg.useReplay) {
+            if (settings().storeForwardCap > 0 && publisher())
+                std::printf("[tpacq] %s published=%llu  queue=%s  link=%s backlog=%zu\n",
+                            srcLabel(), static_cast<unsigned long long>(m_published),
+                            settings().queue.toUtf8().constData(),
+                            publisher()->connected() ? "up" : "down", publisher()->backlog());
+            else
+                std::printf("[tpacq] %s published=%llu  queue=%s\n",
+                            srcLabel(), static_cast<unsigned long long>(m_published),
+                            settings().queue.toUtf8().constData());
+        } else {
+            std::printf("[tpacq] connected=%d bytes=%llu published=%llu packets=%llu bad=%llu\n",
+                        m_serial.isConnected() ? 1 : 0,
+                        static_cast<unsigned long long>(m_serial.bytesReceived()),
+                        static_cast<unsigned long long>(m_published),
+                        static_cast<unsigned long long>(m_serial.packetCount()),
+                        static_cast<unsigned long long>(m_serial.badPacketCount()));
+        }
+        std::fflush(stdout);
+    }
+
+    void announce() {
+        const QString url = messagingUrl();
+        if (m_cfg.useReplay) {
+            std::printf("[tpacq] REPLAY '%s' (%s)  ->  topic '%s'  via %s\n",
+                        m_cfg.replayFile.toUtf8().constData(),
+                        m_cfg.historic ? "historic" : "realtime",
+                        m_topic.c_str(), url.toUtf8().constData());
+        } else if (m_cfg.useSim) {
+            std::printf("[tpacq] SIM %u Hz  ->  topic '%s'  via %s\n",
+                        m_cfg.simRate, m_topic.c_str(), url.toUtf8().constData());
+        } else if (m_cfg.port.isEmpty()) {
+            std::printf("[tpacq] no --port given. Available ports: %s\n",
+                        m_serial.availablePorts().join(", ").toUtf8().constData());
+        } else if (m_serial.connectPort(m_cfg.port)) {
+            std::printf("[tpacq] %s @ %d baud  ->  topic '%s'  via %s\n",
+                        m_cfg.port.toUtf8().constData(), m_serial.baudRate(),
+                        m_topic.c_str(), url.toUtf8().constData());
+        } else {
+            std::printf("[tpacq] failed to open %s: %s\n",
+                        m_cfg.port.toUtf8().constData(),
+                        m_serial.errorText().toUtf8().constData());
+        }
+        std::fflush(stdout);
+    }
+
+    Config m_cfg;
+    std::string m_topic;
+
+    SerialStreamReceiver m_serial;
+    std::unique_ptr<tp::mseed::TdsArchive> m_tds;
+    QFile m_recFile;
+    QTextStream m_recOut;
+
+    QTimer m_simTimer, m_replayTimer, m_statsTimer;
+    std::vector<Rec> m_recs;
+    std::size_t m_idx = 0;
+    quint64 m_seq = 0, m_published = 0;
+    double  m_ph = 0.0, m_nextTs = 0.0;
+};
+
+} // namespace
 
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
@@ -39,209 +264,52 @@ int main(int argc, char* argv[]) {
     QCommandLineOption masterOpt ({"m", "master"}, "tpmaster host", "host", "127.0.0.1");
     QCommandLineOption queueOpt  ("queue", "Target queue: production | playback", "name", "production");
     QCommandLineOption simOpt    ("sim", "No hardware: publish a synthetic waveform instead of reading serial");
+    QCommandLineOption simEventsOpt("sim-events", "With --sim, inject a periodic anomaly burst (demo/testing)");
     QCommandLineOption rateOpt   ("rate", "Sample rate (Hz) for --sim / --replay", "hz", "200");
     QCommandLineOption replayOpt ("replay", "Replay a recorded CSV (t_ms,x,y,z) — usually to --queue playback", "file");
     QCommandLineOption historicOpt("historic", "Replay keeps original timestamps (default: retime to now)");
     QCommandLineOption speedOpt  ("speed", "Replay speed factor", "x", "1");
     QCommandLineOption recordOpt ("record", "Also append every published sample to a CSV (t_ms,x,y,z)", "file");
     QCommandLineOption archiveOpt("archive", "Also archive raw waveforms as miniSEED into this TDS directory", "dir");
+    QCommandLineOption bufferOpt ("buffer",  "Store-and-forward: buffer this many seconds while the broker is down and resend on reconnect", "sec", "0");
     QCommandLineOption baudOpt   ("baud",    "Baud rate", "rate", "460800");
     QCommandLineOption stationOpt("station", "Station id", "id", "1");
     QCommandLineOption objectOpt ("object",  "Object id",  "id", "1");
     QCommandLineOption sensorOpt ("sensor",  "Sensor id",  "id", "1");
-    parser.addOptions({portOpt, masterOpt, queueOpt, simOpt, rateOpt, replayOpt, historicOpt,
-                       speedOpt, recordOpt, archiveOpt, baudOpt, stationOpt, objectOpt, sensorOpt});
+    parser.addOptions({portOpt, masterOpt, queueOpt, simOpt, simEventsOpt, rateOpt, replayOpt, historicOpt,
+                       speedOpt, recordOpt, archiveOpt, bufferOpt, baudOpt, stationOpt, objectOpt, sensorOpt});
     parser.process(app);
 
-    const quint32 station = parser.value(stationOpt).toUInt();
-    const quint32 object  = parser.value(objectOpt).toUInt();
-    const quint32 sensor  = parser.value(sensorOpt).toUInt();
-    const bool useSim     = parser.isSet(simOpt);
-    const bool useReplay  = parser.isSet(replayOpt);
-    const auto queue      = tp::master::queueFromName(parser.value(queueOpt).toStdString());
-    const std::string endpoint = tp::master::in(parser.value(masterOpt).toStdString(), queue);
-    const std::string topic =
-        "raw." + std::to_string(station) + "." + std::to_string(object) + "." + std::to_string(sensor);
+    Config cfg;
+    cfg.station    = parser.value(stationOpt).toUInt();
+    cfg.object     = parser.value(objectOpt).toUInt();
+    cfg.sensor     = parser.value(sensorOpt).toUInt();
+    cfg.simRate    = std::max(1u, parser.value(rateOpt).toUInt());
+    cfg.useSim     = parser.isSet(simOpt);
+    cfg.simEvents  = parser.isSet(simEventsOpt);
+    cfg.useReplay  = parser.isSet(replayOpt);
+    cfg.historic   = parser.isSet(historicOpt);
+    cfg.speed      = std::max(0.01, parser.value(speedOpt).toDouble());
+    cfg.baud       = parser.value(baudOpt).toInt();
+    cfg.port       = parser.value(portOpt);
+    cfg.replayFile = parser.value(replayOpt);
+    cfg.recordFile = parser.value(recordOpt);
+    cfg.record     = parser.isSet(recordOpt);
+    cfg.archiveDir = parser.value(archiveOpt);
+    cfg.archive    = parser.isSet(archiveOpt);
 
-    // Publish to the tpmaster broker (XSUB frontend).
-    tp::Publisher pub(endpoint, /*bind=*/false);
+    // Store-and-forward backlog cap: bufferSec seconds' worth (assume up to 200 Hz).
+    const int bufferSec = parser.value(bufferOpt).toInt();
+    const std::size_t sfCap =
+        bufferSec > 0 ? std::size_t(bufferSec) * std::max(200u, cfg.simRate) : 0;
 
-    // Optional CSV recorder.
-    QFile       recFile(parser.value(recordOpt));
-    QTextStream recOut;
-    if (parser.isSet(recordOpt)) {
-        if (recFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
-            recOut.setDevice(&recFile);
-        else
-            std::printf("[tpacq] cannot open --record file '%s'\n",
-                        parser.value(recordOpt).toUtf8().constData());
-    }
+    tp::client::ApplicationSettings settings;
+    settings.moduleName      = "tpacq";
+    settings.masterHost      = parser.value(masterOpt);
+    settings.queue           = parser.value(queueOpt);
+    settings.sohIntervalSeconds = 2;
+    settings.storeForwardCap = sfCap;      // acquisition is a pure publisher
 
-    // Optional miniSEED TDS archive (raw waveforms on disk — feeds review/replay).
-    std::unique_ptr<tp::mseed::TdsArchive> tds;
-    if (parser.isSet(archiveOpt))
-        tds = std::make_unique<tp::mseed::TdsArchive>(parser.value(archiveOpt).toStdString());
-
-    quint64 published = 0;
-    // Single publish path shared by every source.
-    auto publishSample = [&](qint64 t, double x, double y, double z, quint64 seq, quint32 rate) {
-        if (recOut.device())
-            recOut << t << ',' << x << ',' << y << ',' << z << '\n';
-        if (tds) {                       // gal -> integer counts (x10000), 3 axes
-            tds->addSample(object, sensor, 0, static_cast<int32_t>(std::lround(x * 10000.0)), t, rate);
-            tds->addSample(object, sensor, 1, static_cast<int32_t>(std::lround(y * 10000.0)), t, rate);
-            tds->addSample(object, sensor, 2, static_cast<int32_t>(std::lround(z * 10000.0)), t, rate);
-        }
-        QVariantMap h;
-        h["v"]          = 1;
-        h["type"]       = "raw";
-        h["station"]    = station;
-        h["object"]     = object;
-        h["sensor"]     = sensor;
-        h["t"]          = static_cast<qlonglong>(t);
-        h["x"]          = x;
-        h["y"]          = y;
-        h["z"]          = z;
-        h["seq"]        = static_cast<qulonglong>(seq);
-        h["sampleRate"] = rate;
-
-        tp::BusMessage msg;
-        msg.topic  = topic;
-        msg.header = tp::BusMessage::encodeHeader(h);
-        // payload empty: a single raw sample fits entirely in the header.
-        pub.publish(msg);
-        ++published;
-    };
-
-    // ── Serial source ────────────────────────────────────────────────────────
-    SerialStreamReceiver serial;
-    serial.setBaudRate(parser.value(baudOpt).toInt());
-    QObject::connect(&serial, &SerialStreamReceiver::sampleReceived,
-                     [&](const QVariantMap& s) {
-        publishSample(s.value("timestampMs").toLongLong(),
-                      s.value("x").toDouble(), s.value("y").toDouble(), s.value("z").toDouble(),
-                      s.value("sequence").toULongLong(), s.value("sampleRate").toUInt());
-    });
-
-    // ── Synthetic source (--sim) ─────────────────────────────────────────────
-    QTimer simTimer;
-    const quint32 simRate = std::max(1u, parser.value(rateOpt).toUInt());
-    if (useSim) {
-        const int    tickMs        = 10;                                    // emit in small batches
-        const int    perTick       = std::max(1, int(simRate) * tickMs / 1000);
-        static quint64 seq = 0;
-        static double  ph  = 0.0;
-        const double   f   = 3.1;                                           // structural tone (Hz)
-        const double   dph = 2.0 * M_PI * f / double(simRate);
-        QObject::connect(&simTimer, &QTimer::timeout, [=, &publishSample]() mutable {
-            const qint64 now = QDateTime::currentMSecsSinceEpoch();
-            for (int i = 0; i < perTick; ++i) {
-                const double n = double(std::rand() % 1000 - 500) / 1000.0; // +/-0.5 noise
-                const double x = 5.0 * std::sin(ph)            + 0.8 * n;
-                const double y = 4.0 * std::sin(ph + 1.7)      + 0.8 * n;
-                const double z = 1000.0 + 2.0 * std::sin(ph)   + 0.5 * n;   // ~1g bias on Z
-                publishSample(now, x, y, z, ++seq, simRate);
-                ph += dph;
-                if (ph > 2.0 * M_PI) ph -= 2.0 * M_PI;
-            }
-        });
-        simTimer.start(tickMs);
-    }
-
-    // ── Replay source (--replay file) ─────────────────────────────────────────
-    QTimer replayTimer;
-    std::vector<Rec> recs;
-    if (useReplay) {
-        QFile f(parser.value(replayOpt));
-        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream in(&f);
-            while (!in.atEnd()) {
-                const QStringList p = in.readLine().split(',');
-                if (p.size() >= 4)
-                    recs.push_back({ p[0].toLongLong(), p[1].toDouble(), p[2].toDouble(), p[3].toDouble() });
-            }
-        }
-        const bool    historic = parser.isSet(historicOpt);
-        const double  speed    = std::max(0.01, parser.value(speedOpt).toDouble());
-        const quint32 rate     = std::max(1u, parser.value(rateOpt).toUInt());
-        const int     tickMs   = 10;
-        const int     perTick  = std::max(1, int(std::llround(rate * speed * tickMs / 1000.0)));
-        static std::size_t idx = 0;
-        static quint64 seq = 0;
-        QObject::connect(&replayTimer, &QTimer::timeout, [=, &publishSample, &recs, &replayTimer]() mutable {
-            const qint64 now = QDateTime::currentMSecsSinceEpoch();
-            for (int i = 0; i < perTick && idx < recs.size(); ++i, ++idx) {
-                const Rec& r = recs[idx];
-                publishSample(historic ? r.t : now, r.x, r.y, r.z, ++seq, rate);
-            }
-            if (idx >= recs.size()) {
-                std::printf("[tpacq] replay done (%zu samples)\n", recs.size());
-                std::fflush(stdout);
-                replayTimer.stop();
-            }
-        });
-        // Start after a short delay so subscribers connect first (PUB/SUB slow-joiner);
-        // a one-shot replay burst could otherwise finish before subscriptions propagate.
-        QTimer::singleShot(1300, [&replayTimer, tickMs]() { replayTimer.start(tickMs); });
-    }
-
-    const char* srcLabel = useReplay ? "replay" : useSim ? "sim" : "serial";
-
-    // STATUS heartbeat -> tpmaster/tpmm.
-    const qint64 startMs = QDateTime::currentMSecsSinceEpoch();
-    QTimer heartbeat;
-    QObject::connect(&heartbeat, &QTimer::timeout, [&]() {
-        QVariantMap c;
-        c["published"] = static_cast<qulonglong>(published);
-        c["packets"]   = static_cast<qulonglong>(serial.packetCount());
-        c["bad"]       = static_cast<qulonglong>(serial.badPacketCount());
-        c["src"]       = srcLabel;
-        c["queue"]     = tp::master::queueName(queue);
-        pub.publish(tp::sohMessage("tpacq", startMs, c));
-    });
-    heartbeat.start(2000);
-
-    QTimer stats;
-    QObject::connect(&stats, &QTimer::timeout, [&]() {
-        if (recOut.device()) recOut.flush();
-        if (tds) tds->flushAll();
-        if (useSim || useReplay) {
-            std::printf("[tpacq] %s published=%llu  queue=%s\n",
-                        srcLabel, static_cast<unsigned long long>(published),
-                        tp::master::queueName(queue));
-        } else {
-            std::printf("[tpacq] connected=%d bytes=%llu published=%llu packets=%llu bad=%llu\n",
-                        serial.isConnected() ? 1 : 0,
-                        static_cast<unsigned long long>(serial.bytesReceived()),
-                        static_cast<unsigned long long>(published),
-                        static_cast<unsigned long long>(serial.packetCount()),
-                        static_cast<unsigned long long>(serial.badPacketCount()));
-        }
-        std::fflush(stdout);
-    });
-    stats.start(2000);
-
-    const QString port = parser.value(portOpt);
-    if (useReplay) {
-        std::printf("[tpacq] REPLAY '%s' (%s)  ->  topic '%s'  via tpmaster/%s %s\n",
-                    parser.value(replayOpt).toUtf8().constData(),
-                    parser.isSet(historicOpt) ? "historic" : "realtime",
-                    topic.c_str(), tp::master::queueName(queue), endpoint.c_str());
-    } else if (useSim) {
-        std::printf("[tpacq] SIM %u Hz  ->  topic '%s'  via tpmaster/%s %s\n",
-                    simRate, topic.c_str(), tp::master::queueName(queue), endpoint.c_str());
-    } else if (port.isEmpty()) {
-        std::printf("[tpacq] no --port given. Available ports: %s\n",
-                    serial.availablePorts().join(", ").toUtf8().constData());
-    } else if (serial.connectPort(port)) {
-        std::printf("[tpacq] %s @ %d baud  ->  topic '%s'  via tpmaster %s\n",
-                    port.toUtf8().constData(), serial.baudRate(), topic.c_str(), endpoint.c_str());
-    } else {
-        std::printf("[tpacq] failed to open %s: %s\n",
-                    port.toUtf8().constData(),
-                    serial.errorText().toUtf8().constData());
-    }
-    std::fflush(stdout);
-
-    return app.exec();
+    AcqApplication acq(std::move(settings), std::move(cfg));
+    return acq.exec();
 }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<seiscomp>
+  <module name="tpmaster" category="Messaging">
+    <description>Central TerraPulse message broker and single database writer.</description>
+    <parameter name="queues" type="list:string" default="production, playback"/>
+    <parameter name="defaultGroups" type="list:string"/>
+    <group name="interface">
+      <parameter name="bind" type="string" default="0.0.0.0:5561"/>
+      <parameter name="publish" type="string" default="0.0.0.0:5562"/>
+      <parameter name="control" type="string" default="0.0.0.0:5563"/>
+    </group>
+    <group name="queues.production.processors.messages.dbstore">
+      <parameter name="driver" type="string" default="sqlite"/>
+      <parameter name="read" type="path"/>
+      <parameter name="write" type="path"/>
+      <parameter name="strictVersionMatch" type="boolean" default="true"/>
+    </group>
+  </module>
+</seiscomp>

@@ -5,9 +5,11 @@
 #include <QVariantMap>
 #include <string>
 
-// AppController — bus relay for the UI. Subscribes to SAF/SHF results published
-// by the tpproc daemon and re-emits them to QML. No analysis here anymore (that
-// moved to tpproc); this just forwards decoded result maps.
+// AppController — bus relay for the UI. Subscribes to the analysis results and
+// re-emits them to QML. No analysis here (that lives in the daemons); this only
+// forwards decoded maps:
+//   saf. features   shf. anomalies   evt. grouped events
+//   wfp. strong motion (PGA/PGV/response spectrum/JMA)   qc. data quality
 class AppController : public QObject {
     Q_OBJECT
     Q_PROPERTY(int windowsProcessed READ windowsProcessed NOTIFY windowsProcessedChanged)
@@ -20,6 +22,9 @@ public:
 signals:
     void safReceived(const QVariantMap& saf);
     void shfReceived(const QVariantMap& shf);
+    void eventReceived(const QVariantMap& evt);      // tpevent: structure-level event
+    void wfparamReceived(const QVariantMap& wfp);    // tpwfparam: PGA/PGV/PSA/JMA
+    void qcReceived(const QVariantMap& qc);          // tpqc: data-quality verdict
     void windowsProcessedChanged();
 
 private slots:
