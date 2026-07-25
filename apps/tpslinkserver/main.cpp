@@ -81,11 +81,33 @@ private:
         std::vector<int32_t> buf;
     };
     struct Client {
-        QTcpSocket* sock = nullptr;
-        bool        streaming = false;
-        uint32_t    cursor = 0;      // next sequence to send
-        QByteArray  in;              // handshake line buffer
+        QTcpSocket*        sock = nullptr;
+        bool               streaming = false;
+        uint32_t           cursor = 0;         // next sequence to send
+        QByteArray         in;                 // handshake line buffer
+        QList<QByteArray>  selectors;          // channel filters; empty = all
     };
+
+    // Match a packet's location+channel (5 chars) against a SeedLink selector.
+    // Selector is 3 chars (channel) or 5 chars (location+channel); '?' is a
+    // wildcard. A leading '!' negates. Empty selector list means accept all.
+    static bool selected(const char* locChan5, const QList<QByteArray>& sels) {
+        if (sels.isEmpty()) return true;
+        bool anyPositive = false, matchedPositive = false;
+        for (const QByteArray& s0 : sels) {
+            bool neg = s0.startsWith('!');
+            QByteArray s = neg ? s0.mid(1) : s0;
+            const char* field = (s.size() == 5) ? locChan5 : locChan5 + 2;  // 5=>loc+chan, else chan
+            const int   n     = (s.size() == 5) ? 5 : 3;
+            if (s.size() != 5 && s.size() != 3) continue;
+            bool m = true;
+            for (int i = 0; i < n; ++i)
+                if (s[i] != '?' && s[i] != field[i]) { m = false; break; }
+            if (neg) { if (m) return false; }        // negative match excludes
+            else     { anyPositive = true; matchedPositive |= m; }
+        }
+        return anyPositive ? matchedPositive : true; // only negatives => accept rest
+    }
 
     static uint64_t key(quint32 o, quint32 s, int c) {
         return (uint64_t(o) << 20) | (uint64_t(s) << 4) | uint64_t(c & 0xF);
@@ -151,8 +173,13 @@ private:
         auto ok  = [&] { cl->sock->write("OK\r\n"); };
         if (cmd == "HELLO") {
             cl->sock->write("TerraPulse SeedLink v0.1\r\nTerraPulse\r\n");
-        } else if (cmd == "STATION" || cmd == "SELECT" || cmd == "CAT") {
-            ok();                                   // slice 2: accept, ignore selectors
+        } else if (cmd == "SELECT") {
+            const QByteArray arg = (sp < 0) ? QByteArray() : line.mid(sp + 1).trimmed().toUpper();
+            if (arg.isEmpty()) cl->selectors.clear();     // SELECT alone resets
+            else               cl->selectors.append(arg);
+            ok();
+        } else if (cmd == "STATION" || cmd == "CAT") {
+            ok();                                   // multi-station honoured later
         } else if (cmd == "DATA" || cmd == "FETCH" || cmd == "END") {
             ok();
             // "DATA <seq>" resumes from a hex sequence; bare "DATA" is real-time.
@@ -196,7 +223,10 @@ private:
             for (;;) {
                 const auto r = m_ring.packet(cl->cursor, pkt);
                 if (r == tp::slink::ReadResult::Ok) {
-                    cl->sock->write(pkt, tp::slink::kPacketSize);
+                    // location(2)+channel(3) sit at fixed offsets in the miniSEED
+                    // v2 fixed header, which starts 8 bytes into the SL packet.
+                    if (selected(pkt + tp::slink::kHeaderSize + 13, cl->selectors))
+                        cl->sock->write(pkt, tp::slink::kPacketSize);
                     cl->cursor = (cl->cursor + 1) & tp::slink::kSeqMask;
                 } else if (r == tp::slink::ReadResult::TooOld) {
                     cl->cursor = m_ring.nextSeq();   // fell behind: resync to newest
