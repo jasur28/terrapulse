@@ -80,9 +80,10 @@ int main() {
     if (!id.ok) { std::printf("\nFAILED\n"); return 1; }
     const std::string sid = id.id.sourceId();
 
-    // 1 + 2: round-trip at the current default (200) and at a fuller record.
-    Trace b200, b2000;
+    // 1 + 2: round-trip and bytes/sample across record sizes, to pick a default.
+    Trace b200, b1000, b2000;
     const double bps200  = roundtrip(base + "/r200",  sid, sig, rate, 200,  b200);
+    const double bps1000 = roundtrip(base + "/r1000", sid, sig, rate, 1000, b1000);
     const double bps2000 = roundtrip(base + "/r2000", sid, sig, rate, 2000, b2000);
 
     check(b200.samples.size() == std::size_t(N), "round-trip count (rec 200)",
@@ -91,8 +92,8 @@ int main() {
     bool identical = b200.samples == sig;
     check(identical, "round-trip values identical");
 
-    std::printf("  bytes/sample: recordSamples=200 -> %.2f   recordSamples=2000 -> %.2f"
-                "  (raw int32 = 4.00)\n", bps200, bps2000);
+    std::printf("  bytes/sample: 200 -> %.2f   1000 -> %.2f   2000 -> %.2f"
+                "  (raw int32 = 4.00)\n", bps200, bps1000, bps2000);
     check(bps2000 < bps200, "fuller record is smaller per sample",
           "gain x" + std::to_string(bps200 / bps2000).substr(0, 4));
 

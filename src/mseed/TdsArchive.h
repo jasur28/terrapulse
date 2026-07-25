@@ -14,7 +14,13 @@ namespace tp::mseed {
 
 class TdsArchive {
 public:
-    explicit TdsArchive(std::string root, int recordSamples = 200, int encoding = Steim2);
+    // recordSamples = how many samples to buffer before packing miniSEED. It
+    // trades archive size against write latency: a 512-byte record is only ~20%
+    // full at 200, so the archive was LARGER than raw data. Measured bytes/sample
+    // (clean data, ЗАМЕРЫ §1): 200 -> 2.56, 1000 -> 1.54, 2000 -> 1.28 (raw 4.00).
+    // Default 1000 (~5 s at 200 Hz) is the knee: most of the gain, moderate
+    // latency and crash-loss window. Deployments tune it via tpacq --record-samples.
+    explicit TdsArchive(std::string root, int recordSamples = 1000, int encoding = Steim2);
     ~TdsArchive();
 
     // Bind a channel's FDSN source id BEFORE its samples arrive. The caller

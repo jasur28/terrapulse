@@ -47,6 +47,7 @@ struct Config {
     // empty keeps the legacy numeric id, so existing setups are unchanged.
     QString network = "TP", stationCode, kind = "accelerometer";
     double  cornerPeriod = 1e9;   // >=10 s => broadband band code (accelerometer)
+    int     recordSamples = 1000; // miniSEED buffer before flush (fill vs latency)
 };
 
 class AcqApplication : public tp::client::Application {
@@ -68,7 +69,8 @@ public:
                             m_cfg.recordFile.toUtf8().constData());
         }
         if (m_cfg.archive) {
-            m_tds = std::make_unique<tp::mseed::TdsArchive>(m_cfg.archiveDir.toStdString());
+            m_tds = std::make_unique<tp::mseed::TdsArchive>(
+                m_cfg.archiveDir.toStdString(), m_cfg.recordSamples);
             bindArchiveIdentity();
         }
 
@@ -310,9 +312,10 @@ int main(int argc, char* argv[]) {
     QCommandLineOption staCodeOpt("station-code","FDSN station code (<=5 chars); enables FDSN archive naming", "code");
     QCommandLineOption kindOpt   ("kind",       "Instrument: accelerometer | seismometer", "kind", "accelerometer");
     QCommandLineOption cornerOpt ("corner",     "Sensor corner period (s); >=10 => broadband band code", "sec", "1e9");
+    QCommandLineOption recSampOpt("record-samples","miniSEED samples buffered before flush (fill vs latency)", "n", "1000");
     parser.addOptions({portOpt, masterOpt, queueOpt, simOpt, simEventsOpt, rateOpt, replayOpt, historicOpt,
                        speedOpt, recordOpt, archiveOpt, bufferOpt, baudOpt, stationOpt, objectOpt, sensorOpt,
-                       netOpt, staCodeOpt, kindOpt, cornerOpt});
+                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt});
     parser.process(app);
 
     Config cfg;
@@ -323,6 +326,7 @@ int main(int argc, char* argv[]) {
     cfg.stationCode = parser.value(staCodeOpt);
     cfg.kind        = parser.value(kindOpt);
     cfg.cornerPeriod= parser.value(cornerOpt).toDouble();
+    cfg.recordSamples = std::max(8, parser.value(recSampOpt).toInt());
     cfg.simRate    = std::max(1u, parser.value(rateOpt).toUInt());
     cfg.useSim     = parser.isSet(simOpt);
     cfg.simEvents  = parser.isSet(simEventsOpt);
