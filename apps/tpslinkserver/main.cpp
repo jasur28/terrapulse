@@ -155,9 +155,32 @@ private:
             ok();                                   // slice 2: accept, ignore selectors
         } else if (cmd == "DATA" || cmd == "FETCH" || cmd == "END") {
             ok();
-            cl->cursor = m_ring.nextSeq();          // real-time: start from now
+            // "DATA <seq>" resumes from a hex sequence; bare "DATA" is real-time.
+            const QByteArray arg = (sp < 0) ? QByteArray() : line.mid(sp + 1).trimmed();
+            if (!arg.isEmpty()) {
+                bool okHex = false;
+                const uint32_t req = uint32_t(arg.toUInt(&okHex, 16) & tp::slink::kSeqMask);
+                char tmp[tp::slink::kPacketSize];
+                const auto r = m_ring.packet(req, tmp);
+                const char* how;
+                if (r == tp::slink::ReadResult::Ok) {
+                    cl->cursor = req; how = "backfill";              // still in the ring
+                } else if (req == m_ring.nextSeq()) {
+                    cl->cursor = req; how = "caught up";             // wait for the next one
+                } else if (r == tp::slink::ReadResult::TooOld) {
+                    cl->cursor = m_ring.oldestSeq(); how = "too old, backfilled oldest";
+                } else {
+                    // Unknown seq (e.g. our in-memory ring reset on restart) —
+                    // don't stall waiting for a number that will never come.
+                    cl->cursor = m_ring.nextSeq(); how = "stale seq, real-time";
+                }
+                std::printf("[tpslinkserver] client -> resume from seq %u (asked %u, %s)\n",
+                            cl->cursor, req, how);
+            } else {
+                cl->cursor = m_ring.nextSeq();      // real-time: start from now
+                std::printf("[tpslinkserver] client -> streaming from seq %u\n", cl->cursor);
+            }
             cl->streaming = true;
-            std::printf("[tpslinkserver] client -> streaming from seq %u\n", cl->cursor);
             std::fflush(stdout);
         } else if (cmd == "BYE") {
             cl->sock->disconnectFromHost();

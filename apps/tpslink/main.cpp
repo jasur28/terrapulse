@@ -20,6 +20,7 @@
 #include <QCoreApplication>
 #include <QCommandLineParser>
 #include <QTcpSocket>
+#include <QTimer>
 
 #include <algorithm>
 #include <cstdio>
@@ -71,32 +72,59 @@ public:
         if (m_opt.archive)
             m_tds = std::make_unique<tp::mseed::TdsArchive>(m_opt.archiveDir.toStdString());
 
-        // ── Connect + SeedLink handshake (synchronous) ────────────────────────
+        return connectAndHandshake();
+    }
+
+    // Connect and run the SeedLink handshake. Re-runnable: on reconnect it
+    // resumes with "DATA <seq>" so packets buffered on the server during the
+    // outage are not lost (Stage 3.2). Signals are blocked during the synchronous
+    // handshake so the async onReadyRead does not steal the reply bytes.
+    bool connectAndHandshake() {
+        m_buf.clear();
+        m_sock.blockSignals(true);
+        m_sock.abort();
         m_sock.connectToHost(m_opt.host, m_opt.port);
         if (!m_sock.waitForConnected(5000)) {
             std::fprintf(stderr, "tpslink: cannot connect to %s:%u: %s\n",
                          m_opt.host.toUtf8().constData(), m_opt.port,
                          m_sock.errorString().toUtf8().constData());
-            return false;
+            m_sock.blockSignals(false);
+            scheduleReconnect();
+            return true;   // stay alive; keep retrying
         }
 
         const QByteArray hello = command(m_sock, "HELLO");
         std::printf("[tpslink] %s:%u  %s\n", m_opt.host.toUtf8().constData(), m_opt.port,
                     hello.trimmed().replace('\r', ' ').replace('\n', ' ').constData());
 
-        // Uni-station handshake: STATION -> SELECT (optional) -> DATA -> END.
         const QByteArray staCmd = "STATION " + m_opt.sta.toUtf8() + " " + m_opt.net.toUtf8();
         if (!command(m_sock, staCmd).startsWith("OK")) {
-            std::fprintf(stderr, "tpslink: STATION rejected by server\n"); return false;
+            std::fprintf(stderr, "tpslink: STATION rejected by server\n");
+            m_sock.blockSignals(false); scheduleReconnect(); return true;
         }
         if (m_opt.hasSelect && !command(m_sock, "SELECT " + m_opt.select.toUtf8()).startsWith("OK"))
             std::fprintf(stderr, "tpslink: SELECT rejected (continuing with all channels)\n");
-        if (!command(m_sock, "DATA").startsWith("OK")) {
-            std::fprintf(stderr, "tpslink: DATA rejected by server\n"); return false;
+
+        // Resume from the next packet after the last one we saw, else real-time.
+        QByteArray dataCmd = "DATA";
+        if (m_haveSeq) {
+            const quint32 next = (m_lastSeq + 1) & 0xFFFFFF;
+            dataCmd += " " + QByteArray(QString("%1").arg(next, 6, 16, QChar('0')).toUpper().toLatin1());
+            std::printf("[tpslink] resuming from seq %06X\n", next);
+        }
+        if (!command(m_sock, dataCmd).startsWith("OK")) {
+            std::fprintf(stderr, "tpslink: DATA rejected by server\n");
+            m_sock.blockSignals(false); scheduleReconnect(); return true;
         }
         m_sock.write("END\r\n"); m_sock.flush();   // begin streaming
+        m_sock.blockSignals(false);
 
-        QObject::connect(&m_sock, &QTcpSocket::readyRead, [this]() { onReadyRead(); });
+        if (!m_wired) {
+            QObject::connect(&m_sock, &QTcpSocket::readyRead,    [this]() { onReadyRead(); });
+            QObject::connect(&m_sock, &QTcpSocket::disconnected, [this]() { onDisconnected(); });
+            m_wired = true;
+        }
+        QTimer::singleShot(0, [this]() { onReadyRead(); });   // drain anything buffered
 
         std::printf("[tpslink] streaming %s.%s -> %s  via %s%s\n",
                     m_opt.net.toUtf8().constData(), m_opt.sta.toUtf8().constData(),
@@ -104,6 +132,17 @@ public:
                     m_tds ? "  (+archive)" : "");
         std::fflush(stdout);
         return true;
+    }
+
+    void onDisconnected() {
+        std::printf("[tpslink] disconnected — reconnecting in 2s (resume from seq %06X)\n",
+                    (m_lastSeq + 1) & 0xFFFFFF);
+        std::fflush(stdout);
+        scheduleReconnect();
+    }
+
+    void scheduleReconnect() {
+        QTimer::singleShot(2000, [this]() { connectAndHandshake(); });
     }
 
     QVariantMap sohCounters() override {
@@ -156,6 +195,11 @@ private:
         m_buf += m_sock.readAll();
         while (m_buf.size() >= 520) {
             if (m_buf[0] != 'S' || m_buf[1] != 'L') { m_buf.remove(0, 1); continue; }  // resync
+            // Remember the sequence (header bytes 2..7, hex) so a reconnect can
+            // resume with DATA <seq+1> and not lose the outage gap (Stage 3.2).
+            bool okHex = false;
+            const quint32 seq = m_buf.mid(2, 6).toUInt(&okHex, 16);
+            if (okHex) { m_lastSeq = seq; m_haveSeq = true; }
             const QByteArray rec = m_buf.mid(8, 512);
             m_buf.remove(0, 520);
             for (auto& d : tp::mseed::decode(rec.constData(), rec.size())) {
@@ -186,6 +230,9 @@ private:
     std::unique_ptr<tp::mseed::TdsArchive> m_tds;
     quint64 m_published = 0, m_records = 0;
     double  m_lastRate = 200.0;
+    quint32 m_lastSeq = 0;       // last SeedLink packet sequence seen
+    bool    m_haveSeq = false;   // set once we have received at least one packet
+    bool    m_wired = false;     // readyRead/disconnected connected once
 };
 
 } // namespace

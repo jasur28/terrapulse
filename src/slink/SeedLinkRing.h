@@ -35,6 +35,7 @@ public:
     ReadResult packet(uint32_t seq, char* out) const;
 
     uint32_t   nextSeq()   const { return uint32_t(m_produced & kSeqMask); }   // next push gets this
+    uint32_t   oldestSeq() const { return uint32_t((m_produced - m_count) & kSeqMask); } // oldest retained
     bool       empty()     const { return m_count == 0; }
     std::size_t retained() const { return m_count; }
     uint64_t   produced()  const { return m_produced; }   // absolute count, no wrap
