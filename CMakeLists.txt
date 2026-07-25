@@ -290,6 +290,11 @@ add_executable(tpslink apps/tpslink/main.cpp)
 target_include_directories(tpslink PRIVATE src)
 target_link_libraries(tpslink PRIVATE tpclient tpbus tpmseed Qt6::Core Qt6::Network)
 
+# tpslinkserver — SeedLink server: raw. bus -> retention ring -> TCP (Stage 5)
+add_executable(tpslinkserver apps/tpslinkserver/main.cpp)
+target_include_directories(tpslinkserver PRIVATE src)
+target_link_libraries(tpslinkserver PRIVATE tpclient tpbus tpmseed tpslinkcore Qt6::Core Qt6::Network)
+
 # ── tpmaster — central message broker (XSUB/XPUB) + embedded dbstore ──────────
 add_executable(tpmaster apps/tpmaster/main.cpp src/storage/DbStore.cpp)
 target_include_directories(tpmaster PRIVATE src)
