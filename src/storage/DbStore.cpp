@@ -75,11 +75,20 @@ bool DbStore::initSchema() {
         " event_shf_id INTEGER, action TEXT, operator TEXT, note TEXT, t_ms INTEGER)",
 
         // ── Inventory (data model) ──────────────────────────────────────────
+        // network + station_code are the FDSN codes for the stream, distinct
+        // from the numeric object_id and the human name. Assigned by the centre;
+        // empty station_code falls back to the padded numeric id on read.
         "CREATE TABLE IF NOT EXISTS inv_structures("
-        " object_id INTEGER PRIMARY KEY, name TEXT, lat REAL, lon REAL, description TEXT)",
+        " object_id INTEGER PRIMARY KEY, name TEXT, lat REAL, lon REAL, description TEXT,"
+        " network TEXT DEFAULT 'TP', station_code TEXT DEFAULT '')",
 
+        // kind + corner_period describe what the transducer IS, so the channel
+        // code (HN? vs EH?) can be computed instead of hard-wired. Defaults make
+        // this backward compatible: an old notifier that omits them yields an
+        // accelerometer responding to DC — the previous behaviour.
         "CREATE TABLE IF NOT EXISTS inv_sensors("
         " object_id INTEGER, sensor_id INTEGER, model TEXT, location TEXT,"
+        " kind TEXT DEFAULT 'accelerometer', corner_period REAL DEFAULT 1e9,"
         " PRIMARY KEY(object_id,sensor_id))",
 
         "CREATE TABLE IF NOT EXISTS inv_channels("
@@ -93,6 +102,19 @@ bool DbStore::initSchema() {
                          q.lastError().text().toUtf8().constData());
             return false;
         }
+    }
+
+    // Migrate an already-existing DB: CREATE TABLE IF NOT EXISTS won't add the
+    // new columns to a table made by an earlier build. ADD COLUMN is a no-op
+    // error ("duplicate column") on a fresh DB that already has them — ignore it.
+    const char* alters[] = {
+        "ALTER TABLE inv_sensors ADD COLUMN kind TEXT DEFAULT 'accelerometer'",
+        "ALTER TABLE inv_sensors ADD COLUMN corner_period REAL DEFAULT 1e9",
+        "ALTER TABLE inv_structures ADD COLUMN network TEXT DEFAULT 'TP'",
+        "ALTER TABLE inv_structures ADD COLUMN station_code TEXT DEFAULT ''",
+    };
+    for (const char* s : alters) {
+        q.exec(s);   // failure means the column already exists; that is fine.
     }
     return true;
 }
@@ -173,13 +195,17 @@ void DbStore::writeInventory(const QVariantMap& h) {
             q.prepare("DELETE FROM inv_structures WHERE object_id=?");
             q.bindValue(0, h.value("objectId"));
         } else {
-            q.prepare("INSERT OR REPLACE INTO inv_structures(object_id,name,lat,lon,description) "
-                      "VALUES(?,?,?,?,?)");
+            q.prepare("INSERT OR REPLACE INTO inv_structures"
+                      "(object_id,name,lat,lon,description,network,station_code) "
+                      "VALUES(?,?,?,?,?,?,?)");
             q.bindValue(0, h.value("objectId"));
             q.bindValue(1, h.value("name"));
             q.bindValue(2, h.value("lat"));
             q.bindValue(3, h.value("lon"));
             q.bindValue(4, h.value("description"));
+            q.bindValue(5, h.value("network").toString().isEmpty()
+                              ? QVariant("TP") : h.value("network"));
+            q.bindValue(6, h.value("stationCode"));   // empty -> derived on read
         }
     } else if (kind == "sensor") {
         if (remove) {
@@ -187,12 +213,21 @@ void DbStore::writeInventory(const QVariantMap& h) {
             q.bindValue(0, h.value("objectId"));
             q.bindValue(1, h.value("sensorId"));
         } else {
-            q.prepare("INSERT OR REPLACE INTO inv_sensors(object_id,sensor_id,model,location) "
-                      "VALUES(?,?,?,?)");
+            q.prepare("INSERT OR REPLACE INTO inv_sensors"
+                      "(object_id,sensor_id,model,location,kind,corner_period) "
+                      "VALUES(?,?,?,?,?,?)");
             q.bindValue(0, h.value("objectId"));
             q.bindValue(1, h.value("sensorId"));
             q.bindValue(2, h.value("model"));
             q.bindValue(3, h.value("location"));
+            // NB: "kind" here is the notifier's own routing field (== "sensor").
+            // The instrument kind travels under "sensorKind" to avoid that clash.
+            // Defaults keep an old notifier (no sensorKind/corner) as a
+            // DC-coupled accelerometer — the behaviour before this field existed.
+            q.bindValue(4, h.value("sensorKind").toString().isEmpty()
+                              ? QVariant("accelerometer") : h.value("sensorKind"));
+            q.bindValue(5, h.contains("cornerPeriod") ? h.value("cornerPeriod")
+                                                       : QVariant(1e9));
         }
     } else if (kind == "channel") {
         if (remove) {
@@ -249,17 +284,19 @@ QVariantList DbStore::snapshot() {
     QVariantList out;
     QSqlQuery q(m_db);
 
-    q.exec("SELECT object_id,name,lat,lon,description FROM inv_structures");
+    q.exec("SELECT object_id,name,lat,lon,description,network,station_code FROM inv_structures");
     while (q.next()) {
         out.append(QVariantMap{ {"type","notifier"}, {"op","add"}, {"kind","structure"},
             {"objectId",q.value(0)}, {"name",q.value(1)}, {"lat",q.value(2)},
-            {"lon",q.value(3)}, {"description",q.value(4)} });
+            {"lon",q.value(3)}, {"description",q.value(4)},
+            {"network",q.value(5)}, {"stationCode",q.value(6)} });
     }
-    q.exec("SELECT object_id,sensor_id,model,location FROM inv_sensors");
+    q.exec("SELECT object_id,sensor_id,model,location,kind,corner_period FROM inv_sensors");
     while (q.next()) {
         out.append(QVariantMap{ {"type","notifier"}, {"op","add"}, {"kind","sensor"},
             {"objectId",q.value(0)}, {"sensorId",q.value(1)},
-            {"model",q.value(2)}, {"location",q.value(3)} });
+            {"model",q.value(2)}, {"location",q.value(3)},
+            {"sensorKind",q.value(4)}, {"cornerPeriod",q.value(5)} });
     }
     q.exec("SELECT object_id,sensor_id,component,sample_rate,unit,gain FROM inv_channels");
     while (q.next()) {

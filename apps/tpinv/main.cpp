@@ -48,6 +48,10 @@ private:
             st.lat         = js.value("lat", 0.0);
             st.lon         = js.value("lon", 0.0);
             st.description = qstr(js, "description");
+            // FDSN codes; optional, default network "TP" and empty stationCode
+            // (derived from the numeric id) keep old inventory files working.
+            st.network     = qstr(js, "network", "TP");
+            st.stationCode = qstr(js, "stationCode");
             publish(tp::messaging::notifier(m_op, "structure", st.key(), st.toVariant()));
             ++nStruct;
 
@@ -57,6 +61,10 @@ private:
                 sn.sensorId = jse.value("sensorId", 0);
                 sn.model    = qstr(jse, "model");
                 sn.location = qstr(jse, "location");
+                // Optional: default to a DC-coupled accelerometer when absent,
+                // so existing inventory files keep working unchanged.
+                sn.sensorKind   = qstr(jse, "kind", "accelerometer");
+                sn.cornerPeriod = jse.value("cornerPeriod", 1e9);
                 publish(tp::messaging::notifier(m_op, "sensor", sn.key(), sn.toVariant()));
                 ++nSensor;
 

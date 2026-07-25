@@ -3,6 +3,8 @@
     {
       "objectId": 1,
       "name": "Bridge-1",
+      "network": "UZ",
+      "stationCode": "BRDG1",
       "lat": 41.311,
       "lon": 69.279,
       "description": "Highway bridge, main span",
@@ -32,6 +34,8 @@
     {
       "objectId": 2,
       "name": "Tower-A",
+      "network": "UZ",
+      "stationCode": "TWRA",
       "lat": 41.299,
       "lon": 69.240,
       "description": "High-rise residential tower",
@@ -44,6 +48,16 @@
             { "component": 0, "sampleRate": 200, "unit": "gal", "gain": 1.0 },
             { "component": 1, "sampleRate": 200, "unit": "gal", "gain": 1.0 },
             { "component": 2, "sampleRate": 200, "unit": "gal", "gain": 1.0 }
+          ]
+        },
+        {
+          "sensorId": 2,
+          "model": "SM-3",
+          "location": "basement",
+          "kind": "seismometer",
+          "cornerPeriod": 2.0,
+          "channels": [
+            { "component": 0, "sampleRate": 100, "unit": "m/s", "gain": 1.0 }
           ]
         }
       ]

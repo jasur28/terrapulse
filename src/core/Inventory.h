@@ -13,26 +13,39 @@
 namespace tp::inv {
 
 struct Structure {
-    quint32 objectId = 0;
-    QString name;
+    quint32 objectId = 0;         // internal numeric key
+    QString name;                 // human name, e.g. "Bridge-1"
     double  lat = 0.0, lon = 0.0;
     QString description;
+    // FDSN codes for the waveform stream. These are NOT the numeric id and NOT
+    // the human name — a third thing. network <=2, stationCode <=5 chars.
+    // Assigned by the centre (see docs/АРХИТЕКТУРА.md §14); empty falls back to
+    // the zero-padded numeric id so old inventories keep working.
+    QString network = "TP";
+    QString stationCode;
 
     QString key() const { return QString::number(objectId); }
     QVariantMap toVariant() const {
         return { {"kind","structure"}, {"objectId",objectId}, {"name",name},
-                 {"lat",lat}, {"lon",lon}, {"description",description} };
+                 {"lat",lat}, {"lon",lon}, {"description",description},
+                 {"network",network}, {"stationCode",stationCode} };
     }
 };
 
 struct Sensor {
     quint32 objectId = 0, sensorId = 0;
     QString model, location;
+    // What the transducer IS — decides the channel code (HN? vs EH?).
+    // Defaults are a DC-coupled accelerometer, matching pre-existing behaviour.
+    QString sensorKind = "accelerometer";   // "accelerometer" | "seismometer"
+    double  cornerPeriod = 1e9;             // seconds; >=10 => broadband band code
 
     QString key() const { return QString("%1.%2").arg(objectId).arg(sensorId); }
     QVariantMap toVariant() const {
+        // "kind" stays the notifier routing field; instrument type is "sensorKind".
         return { {"kind","sensor"}, {"objectId",objectId}, {"sensorId",sensorId},
-                 {"model",model}, {"location",location} };
+                 {"model",model}, {"location",location},
+                 {"sensorKind",sensorKind}, {"cornerPeriod",cornerPeriod} };
     }
 };
 
