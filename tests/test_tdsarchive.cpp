@@ -110,10 +110,12 @@ int main() {
                 tds.addSample(1, 100, 0, sig[i], t + int64_t(i * 5), rate);
         }
         const bool wroteSomething = fs::exists(dir) && dirBytes(dir) > 0;
-        // Known bug (CLAUDE.md §8.3): legacy path silently writes nothing for
-        // sensor>=100. We assert the CURRENT reality so a future fix flips it.
-        check(!wroteSomething, "sensor>=100 legacy path writes nothing (known bug)",
-              wroteSomething ? "now writes — bug fixed, update test" : "still empty");
+        // The archive LIBRARY still can't pack sensor>=100 into v2 (location is
+        // 2 chars) — so a raw write here yields nothing. That silent failure is
+        // now caught upstream: tpacq refuses to start (bindArchiveIdentity,
+        // Stage 1.4). This asserts the library reality the guard protects against.
+        check(!wroteSomething, "sensor>=100 raw write is empty (guarded in tpacq)",
+              wroteSomething ? "now writes — revisit the tpacq guard" : "empty as expected");
     }
 
     fs::remove_all(base);

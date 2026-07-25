@@ -71,7 +71,7 @@ public:
         if (m_cfg.archive) {
             m_tds = std::make_unique<tp::mseed::TdsArchive>(
                 m_cfg.archiveDir.toStdString(), m_cfg.recordSamples);
-            bindArchiveIdentity();
+            if (!bindArchiveIdentity()) return false;   // refuse rather than archive nothing
         }
 
         m_serial.setBaudRate(m_cfg.baud);
@@ -107,11 +107,27 @@ private:
         return m_cfg.useReplay ? "replay" : m_cfg.useSim ? "sim" : "serial";
     }
 
-    // Resolve this raw source's FDSN identity from config and bind the archive's
-    // three axes to it. Only when a stationCode is configured — otherwise the
-    // archive keeps the legacy numeric id (unchanged behaviour).
-    void bindArchiveIdentity() {
-        if (!m_tds || m_cfg.stationCode.isEmpty()) return;
+    // Resolve and VALIDATE this raw source's archive identity at startup, and
+    // bind the three axes. Returns false on an identity that miniSEED v2 cannot
+    // represent — so the operator learns immediately, instead of the archive
+    // silently staying empty for months (АРХИТЕКТУРА §14, "reject at input").
+    bool bindArchiveIdentity() {
+        if (!m_tds) return true;
+
+        // Legacy numeric naming (no station code): station=object, location=
+        // sensor. miniSEED v2 location is 2 chars, so sensor must be 0..99.
+        if (m_cfg.stationCode.isEmpty()) {
+            if (m_cfg.sensor > 99) {
+                std::fprintf(stderr,
+                    "[tpacq] FATAL: --archive with sensor id %u cannot be written "
+                    "to miniSEED v2 (location max 99). Give an FDSN --station-code, "
+                    "or use a sensor id <= 99.\n", m_cfg.sensor);
+                return false;
+            }
+            return true;   // legacy id is valid
+        }
+
+        // FDSN naming: makeStreamId enforces every v2 field width.
         const auto kind = m_cfg.kind == "seismometer"
                               ? tp::mseed::Instrument::Seismometer
                               : tp::mseed::Instrument::Accelerometer;
@@ -119,14 +135,16 @@ private:
             const auto r = tp::mseed::makeStreamId(
                 m_cfg.network.toStdString(), m_cfg.stationCode.toStdString(),
                 m_cfg.sensor, kind, m_cfg.simRate, m_cfg.cornerPeriod, comp);
-            if (r.ok) {
-                m_tds->setSourceId(m_cfg.object, m_cfg.sensor, comp, r.id.sourceId());
-                std::printf("[tpacq] channel %d -> %s\n", comp, r.id.sourceId().c_str());
-            } else {
-                std::printf("[tpacq] identity error (comp %d): %s\n", comp, r.error.c_str());
+            if (!r.ok) {
+                std::fprintf(stderr, "[tpacq] FATAL: cannot build archive identity "
+                             "(comp %d): %s\n", comp, r.error.c_str());
+                return false;
             }
+            m_tds->setSourceId(m_cfg.object, m_cfg.sensor, comp, r.id.sourceId());
+            std::printf("[tpacq] channel %d -> %s\n", comp, r.id.sourceId().c_str());
         }
         std::fflush(stdout);
+        return true;
     }
 
     // Single publish path shared by every source.
