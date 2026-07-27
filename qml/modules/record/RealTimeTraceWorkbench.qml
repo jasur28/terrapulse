@@ -8,6 +8,7 @@ Item {
 
     property bool filterEnabled: true
     property int activeTab: 0
+    property bool manualAssociatorVisible: false
     property int maxRows: 80
     property int maxPoints: 1400
     property real windowSecs: 900
@@ -16,6 +17,7 @@ Item {
     property bool dirty: false
     property var liveSeries: ({})
     property var picks: []
+    property var artificialOrigin: ({ time: "", lat: "41.3111", lon: "69.2797", depth: "10" })
 
     readonly property color traceGray: "#7d7d7d"
     readonly property color traceGreen: "#62b400"
@@ -81,6 +83,14 @@ Item {
     function addPick(t, label, associated) {
         root.picks.push({ t: t, label: label, associated: associated })
         while (root.picks.length > 80) root.picks.shift()
+    }
+
+    function openArtificialOrigin() {
+        originTime.text = new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC"
+        originLat.text = artificialOrigin.lat
+        originLon.text = artificialOrigin.lon
+        originDepth.text = artificialOrigin.depth
+        artificialOriginDialog.open()
     }
 
     Connections {
@@ -166,18 +176,23 @@ Item {
             }
         }
 
-        Rectangle {
+        RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: "#f4f4f4"
-            border.color: "#a8a8a8"
-            clip: true
+            spacing: 0
 
-            Canvas {
-                id: canvas
-                anchors.fill: parent
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "#f4f4f4"
+                border.color: "#a8a8a8"
+                clip: true
 
-                onPaint: {
+                Canvas {
+                    id: canvas
+                    anchors.fill: parent
+
+                    onPaint: {
                     var ctx = getContext("2d")
                     ctx.clearRect(0, 0, width, height)
                     ctx.fillStyle = "#f4f4f4"
@@ -323,6 +338,139 @@ Item {
                         ctx.fillText(root.formatClock(tt), xTick, top + visibleRows * rowH + 12)
                     }
                     ctx.fillText(new Date().toISOString().slice(0, 10), left + 80, top + visibleRows * rowH + 36)
+                    }
+                }
+            }
+
+            Rectangle {
+                id: associatorPanel
+                visible: root.manualAssociatorVisible
+                Layout.preferredWidth: visible ? 340 : 0
+                Layout.fillHeight: true
+                color: "#efefef"
+                border.color: "#b6b6b6"
+                clip: true
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 8
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Text {
+                            Layout.fillWidth: true
+                            text: "Manual associator"
+                            color: "#202020"
+                            font.pixelSize: 13
+                            font.bold: true
+                            elide: Text.ElideRight
+                        }
+                        ClassicToolButton {
+                            text: "x"
+                            implicitWidth: 28
+                            onClicked: root.manualAssociatorVisible = false
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 118
+                        color: "#ffffff"
+                        border.color: "#c8c8c8"
+                        clip: true
+
+                        GridView {
+                            anchors.fill: parent
+                            anchors.margins: 6
+                            cellWidth: 150
+                            cellHeight: 32
+                            model: Math.min(root.picks.length, 24)
+                            delegate: Rectangle {
+                                width: 142
+                                height: 26
+                                color: "#e9e9e9"
+                                border.color: "#b90000"
+                                border.width: 2
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "TP." + (index + 1) + "..HH" + (index % 3 === 0 ? "Z" : index % 3 === 1 ? "N" : "E") + " - " + root.picks[index].label
+                                    color: "#202020"
+                                    font.pixelSize: 11
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 220
+                        color: "#d8d8d8"
+                        border.color: "#a8a8a8"
+                        clip: true
+
+                        MapView {
+                            anchors.fill: parent
+                            provider: "osm"
+                            tilesUrl: (typeof mapsUrl !== "undefined" && mapsUrl !== "") ? mapsUrl + "/osm" : ""
+                            showLabels: true
+                            markers: [
+                                { lon: 69.2797, lat: 41.3111, color: "#f0e000", outline: "#8a008a", shape: "event", pulse: true, label: "Origin" },
+                                { lon: 69.2430, lat: 41.3260, color: "#0048ff", outline: "#ffffff", shape: "station", label: "TP02" },
+                                { lon: 69.3380, lat: 41.2990, color: "#a00000", outline: "#ffffff", shape: "station", label: "TP03" }
+                            ]
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        color: "#ffffff"
+                        border.color: "#c8c8c8"
+
+                        GridLayout {
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            columns: 2
+                            rowSpacing: 7
+                            columnSpacing: 8
+
+                            Repeater {
+                                model: [
+                                    "Time:", new Date().toISOString().replace("T", " ").slice(0, 19),
+                                    "Depth:", "10 m",
+                                    "Lat:", "41.3111 N",
+                                    "Lon:", "69.2797 E",
+                                    "Phases:", Math.max(1, root.picks.length),
+                                    "RMS Res.:", "0.0 s",
+                                    "Agency:", "TerraPulse",
+                                    "Author:", "tprttv"
+                                ]
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData
+                                    color: index % 2 === 0 ? "#555555" : "#202020"
+                                    font.pixelSize: 12
+                                    font.bold: index % 2 === 1
+                                    horizontalAlignment: index % 2 === 0 ? Text.AlignRight : Text.AlignLeft
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        ClassicToolButton { text: "Inspect" }
+                        ClassicToolButton { text: "Show origin" }
+                        Item { Layout.fillWidth: true }
+                        Text {
+                            text: root.picks.length > 0 ? "Status: picks ready" : "Status: waiting"
+                            color: "#202020"
+                            font.pixelSize: 11
+                        }
+                    }
                 }
             }
         }
@@ -366,6 +514,66 @@ Item {
                     color: "#202020"
                     font.pixelSize: 12
                 }
+            }
+        }
+    }
+
+    Dialog {
+        id: artificialOriginDialog
+        modal: true
+        title: "Artificial Origin"
+        standardButtons: Dialog.NoButton
+        width: 320
+        height: 252
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+
+        background: Rectangle {
+            color: "#efefef"
+            border.color: "#8f8f8f"
+            radius: 2
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 12
+            spacing: 10
+
+            Text {
+                Layout.fillWidth: true
+                text: "Origin"
+                horizontalAlignment: Text.AlignHCenter
+                color: "#202020"
+                font.pixelSize: 13
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 2
+                rowSpacing: 8
+                columnSpacing: 8
+
+                Text { text: "Time:"; color: "#202020"; font.pixelSize: 12 }
+                TextField { id: originTime; Layout.fillWidth: true; font.pixelSize: 12; selectByMouse: true }
+                Text { text: "Lat:"; color: "#202020"; font.pixelSize: 12 }
+                TextField { id: originLat; Layout.fillWidth: true; font.pixelSize: 12; horizontalAlignment: TextInput.AlignRight }
+                Text { text: "Lon:"; color: "#202020"; font.pixelSize: 12 }
+                TextField { id: originLon; Layout.fillWidth: true; font.pixelSize: 12; horizontalAlignment: TextInput.AlignRight }
+                Text { text: "Depth:"; color: "#202020"; font.pixelSize: 12 }
+                TextField { id: originDepth; Layout.fillWidth: true; font.pixelSize: 12; horizontalAlignment: TextInput.AlignRight }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                ClassicToolButton {
+                    text: "Create"
+                    onClicked: {
+                        root.artificialOrigin = ({ time: originTime.text, lat: originLat.text, lon: originLon.text, depth: originDepth.text })
+                        artificialOriginDialog.close()
+                    }
+                }
+                ClassicToolButton { text: "Cancel"; onClicked: artificialOriginDialog.close() }
             }
         }
     }

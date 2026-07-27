@@ -206,7 +206,7 @@ target_link_libraries(tpevent PRIVATE tpclient tpbus Qt6::Core tpcfg)
 # ── tpwfparam — strong-motion params (PGA/PGV/response spectra/JMA) ───────────
 add_executable(tpwfparam apps/tpwfparam/main.cpp)
 target_include_directories(tpwfparam PRIVATE src)
-target_link_libraries(tpwfparam PRIVATE tp_backend tpclient tpbus tpslinkcore Qt6::Core Qt6::Network tpcfg)
+target_link_libraries(tpwfparam PRIVATE tp_backend tpclient tpbus tpslinkcore tpfilter Qt6::Core Qt6::Network tpcfg)
 
 # ── tpqc — data-quality metrics (gaps/latency/spikes/availability) ────────────
 add_executable(tpqc apps/tpqc/main.cpp)

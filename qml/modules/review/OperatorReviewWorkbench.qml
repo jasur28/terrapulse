@@ -159,10 +159,10 @@ Item {
                 anchors.rightMargin: 8
                 spacing: 8
 
-                Button { text: "\u21b6"; enabled: root.selectedIndex < root.events.length - 1; onClicked: root.selectEvent(root.selectedIndex + 1) }
-                Button { text: "\u21b7"; enabled: root.selectedIndex > 0; onClicked: root.selectEvent(root.selectedIndex - 1) }
-                Button { text: "Previous event"; enabled: root.selectedIndex < root.events.length - 1; onClicked: root.selectEvent(root.selectedIndex + 1) }
-                Button { text: "Next event"; enabled: root.selectedIndex > 0; onClicked: root.selectEvent(root.selectedIndex - 1) }
+                ClassicToolButton { text: "\u21b6"; enabled: root.selectedIndex < root.events.length - 1; onClicked: root.selectEvent(root.selectedIndex + 1) }
+                ClassicToolButton { text: "\u21b7"; enabled: root.selectedIndex > 0; onClicked: root.selectEvent(root.selectedIndex - 1) }
+                ClassicToolButton { text: "Previous event"; enabled: root.selectedIndex < root.events.length - 1; onClicked: root.selectEvent(root.selectedIndex + 1) }
+                ClassicToolButton { text: "Next event"; enabled: root.selectedIndex > 0; onClicked: root.selectEvent(root.selectedIndex - 1) }
                 Item { Layout.fillWidth: true }
                 Text {
                     text: selectedEvent ? selectedEvent.id + "  " + eventTime(selectedEvent) : "No event selected"
@@ -343,7 +343,7 @@ Item {
                     spacing: 8
 
                     ComboBox { Layout.preferredWidth: 140; model: ["TPLOC", "Grid search", "Least squares"] }
-                    Button { text: "\u2699" }
+                    ClassicToolButton { text: "\u2699" }
                     Text { text: "Profile:"; color: "#202020"; font.pixelSize: 12 }
                     ComboBox { Layout.preferredWidth: 130; model: ["structure", "bridge", "building", "tower"] }
                     CheckBox { text: "Fix depth" }
@@ -354,22 +354,23 @@ Item {
                     Text { text: "km"; color: "#202020"; font.pixelSize: 12 }
                     CheckBox { text: "Ignore initial location" }
                     Item { Layout.fillWidth: true }
-                    Button { text: "\u2630" }
+                    ClassicToolButton { text: "\u2630" }
                 }
 
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 8
 
-                    Button { text: "Relocate" }
-                    Button { text: "\u25b6 Run..." }
+                    ClassicToolButton { text: "Relocate" }
+                    ClassicToolButton { text: "\u25b6 Run..." }
                     ComboBox { Layout.preferredWidth: 300; enabled: false; model: ["depth type set by locator"] }
                     Item { Layout.fillWidth: true }
-                    Button { text: "Picker"; onClicked: root.currentTab = 0 }
-                    Button { text: "Import picks" }
-                    Button { text: "Compute magnitudes"; enabled: root.selectedEvent !== null }
-                    Button {
+                    ClassicToolButton { text: "Picker"; onClicked: root.currentTab = 0 }
+                    ClassicToolButton { text: "Import picks" }
+                    ClassicToolButton { text: "Compute magnitudes"; enabled: root.selectedEvent !== null }
+                    ClassicToolButton {
                         text: "Confirm"
+                        success: true
                         enabled: root.selectedEvent !== null
                         onClicked: {
                             if (root.selectedEvent && typeof journalController !== "undefined")
@@ -524,7 +525,7 @@ Item {
                     TextField { Layout.preferredWidth: 80; text: "1.50"; enabled: false }
                     ComboBox { Layout.preferredWidth: 160; model: ["AbsMax", "PGA", "PGV", "PSA"] }
                     Item { Layout.fillWidth: true }
-                    Button { text: "\u2714 Apply all" }
+                    ClassicToolButton { text: "\u2714 Apply all"; success: true }
                 }
             }
 

@@ -326,7 +326,11 @@ Item {
                     font.bold: true
                     elide: Text.ElideRight
                 }
-                Button { text: "x"; onClicked: inspector.closeRequested() }
+                ClassicToolButton {
+                    text: "x"
+                    implicitWidth: 28
+                    onClicked: inspector.closeRequested()
+                }
             }
 
             GridLayout {
@@ -480,17 +484,17 @@ Item {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 32
                 spacing: 8
-                Button { text: "Clear list" }
-                Button { text: "\u25bc" }
+                ClassicToolButton { text: "Clear list" }
+                ClassicToolButton { text: "\u25bc" }
                 Item { Layout.fillWidth: true }
                 Text { text: "Last days:"; color: "#111111"; font.pixelSize: 12 }
                 SpinBox { from: 1; to: 365; value: 1 }
-                Button { text: "Read" }
+                ClassicToolButton { text: "Read" }
                 Text { text: "From:"; color: "#111111"; font.pixelSize: 12 }
                 TextField { Layout.preferredWidth: 160; text: new Date(Date.now() - 86400000).toISOString().replace("T", " ").slice(0, 19) }
                 Text { text: "To:"; color: "#111111"; font.pixelSize: 12 }
                 TextField { Layout.preferredWidth: 160; text: new Date().toISOString().replace("T", " ").slice(0, 19) }
-                Button { text: "Read" }
+                ClassicToolButton { text: "Read" }
             }
 
             RowLayout {
@@ -502,7 +506,7 @@ Item {
                 CheckBox { text: "Hide events" }
                 ComboBox { Layout.preferredWidth: 90; model: ["outside", "inside"] }
                 ComboBox { Layout.preferredWidth: 120; model: ["- custom -", "city", "site"] }
-                Button { text: "..." }
+                ClassicToolButton { text: "..." }
                 CheckBox { text: "Hide new events" }
                 Item { Layout.fillWidth: true }
             }

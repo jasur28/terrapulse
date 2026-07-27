@@ -12,7 +12,10 @@
 #include "terrapulse/messaging/rawsamples.h"
 #include "terrapulse/messaging/inventorymap.h"
 #include "slink/WaveformClient.h"
+#include "proc/Filter.h"
+#include "proc/StreamMonitor.h"
 #include <memory>
+#include <unordered_map>
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
@@ -40,10 +43,12 @@ class WfParamApplication : public tp::client::Application {
 public:
     WfParamApplication(tp::client::ApplicationSettings settings, double windowSec, int periodMs,
                        std::vector<double> periods, double damping,
-                       QString slinkHost = {}, quint16 slinkPort = 0, QString inventory = {})
+                       QString slinkHost = {}, quint16 slinkPort = 0, QString inventory = {},
+                       QString filterSpec = {})
         : Application(std::move(settings)), m_windowSec(windowSec), m_periodMs(periodMs),
           m_periods(std::move(periods)), m_damping(damping),
-          m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort), m_inventory(std::move(inventory)) {}
+          m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort), m_inventory(std::move(inventory)),
+          m_filterSpec(std::move(filterSpec)) {}
 
     bool init() override {
         if (!Application::init()) return false;
@@ -73,6 +78,7 @@ public:
         QVariantMap c;
         c["published"] = static_cast<qulonglong>(m_published);
         c["sensors"]   = m_bufs.size();
+        c["streamFaults"] = static_cast<qulonglong>(m_streamFaults);
         if (m_wf) c["unresolved"] = static_cast<qulonglong>(m_wf->unresolved());
         return c;
     }
@@ -82,10 +88,36 @@ protected:
     // and the SeedLink WaveformClient path (Level 2).
     void feedTriple(quint32 station, quint32 obj, quint32 sen,
                     double x, double y, double z, qint64 t, double rate) {
-        Buf& b = m_bufs[(quint64(obj) << 20) | sen];
+        const quint64 key = (quint64(obj) << 20) | sen;
+        Buf& b = m_bufs[key];
         b.station = station;
         if (rate > 0) b.rate = rate;
         b.lastT = t;
+
+        // Stream integrity + optional filtering (high-pass matters here: PGV
+        // integrates acceleration, so residual drift must be removed first).
+        Mon& mon = m_monitors[key];
+        const double raw[3] = { x, y, z };
+        bool broke = false;
+        for (int i = 0; i < 3; ++i) {
+            const auto s = mon.m[i].feed(raw[i], t, rate);
+            if (s != tp::proc::StreamStatus::Ok) {
+                ++m_streamFaults;
+                if (s == tp::proc::StreamStatus::Gap || s == tp::proc::StreamStatus::Overlap ||
+                    s == tp::proc::StreamStatus::RateChanged) broke = true;
+            }
+        }
+        if (!m_filterSpec.isEmpty() && rate > 0) {
+            Filt& f = m_filters[key];
+            if (!f.built) {
+                for (int i = 0; i < 3; ++i)
+                    f.c[i] = tp::proc::FilterChain::fromSpec(m_filterSpec.toStdString(), rate);
+                f.built = true;
+            }
+            if (broke) for (int i = 0; i < 3; ++i) f.c[i].reset();
+            x = f.c[0].process(x); y = f.c[1].process(y); z = f.c[2].process(z);
+        }
+
         b.x.push_back(float(x));
         b.y.push_back(float(y));
         b.z.push_back(float(z));
@@ -183,6 +215,13 @@ private:
     quint16 m_slinkPort = 0;
     QString m_inventory;
     std::unique_ptr<tp::slink::WaveformClient> m_wf;
+
+    QString m_filterSpec;
+    struct Filt { tp::proc::FilterChain c[3]; bool built = false; };
+    std::unordered_map<quint64, Filt> m_filters;
+    struct Mon { tp::proc::StreamMonitor m[3]; };
+    std::unordered_map<quint64, Mon> m_monitors;
+    quint64 m_streamFaults = 0;
 };
 
 } // namespace
@@ -208,7 +247,10 @@ int main(int argc, char* argv[]) {
     QCommandLineOption slinkOpt("slink", "Read waveforms from a SeedLink backbone host:port "
                                 "instead of the raw. bus (Level 2)", "host:port", "");
     QCommandLineOption invOpt("inventory", "Inventory JSON for FDSN station->object mapping", "file", "");
-    parser.addOptions({masterOpt, queueOpt, winOpt, perOpt, slinkOpt, invOpt});
+    QCommandLineOption filterOpt("filter", "Filter chain before strong-motion analysis, e.g. "
+                                 "\"hp:0.1,lp:25\" (high-pass removes drift before PGV integration)",
+                                 "spec", cfg.str("wfparam.filter", ""));
+    parser.addOptions({masterOpt, queueOpt, winOpt, perOpt, slinkOpt, invOpt, filterOpt});
     parser.process(app);
 
     QString slinkHost; quint16 slinkPort = 0;
@@ -241,6 +283,6 @@ int main(int argc, char* argv[]) {
                           qMax(500, parser.value(perOpt).toInt() * 1000),
                           std::move(periods),
                           cfg.number("wfparam.damping", 0.05),
-                          slinkHost, slinkPort, parser.value(invOpt));
+                          slinkHost, slinkPort, parser.value(invOpt), parser.value(filterOpt));
     return wf.exec();
 }
