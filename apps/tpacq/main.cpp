@@ -21,6 +21,7 @@
 #include <QStringList>
 #include <QTextStream>
 #include <QTimer>
+#include <QVariantList>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -48,6 +49,7 @@ struct Config {
     QString network = "TP", stationCode, kind = "accelerometer";
     double  cornerPeriod = 1e9;   // >=10 s => broadband band code (accelerometer)
     int     recordSamples = 1000; // miniSEED buffer before flush (fill vs latency)
+    int     batch = 20;           // bus samples per message (1 = per-sample)
 };
 
 class AcqApplication : public tp::client::Application {
@@ -156,20 +158,34 @@ private:
             m_tds->addSample(m_cfg.object, m_cfg.sensor, 1, static_cast<int32_t>(std::lround(y * 10000.0)), t, rate);
             m_tds->addSample(m_cfg.object, m_cfg.sensor, 2, static_cast<int32_t>(std::lround(z * 10000.0)), t, rate);
         }
+        // Batch the BUS publish: accumulate N samples into one raw message to cut
+        // the message rate ~N-fold (docs/МАСШТАБИРОВАНИЕ §3a). The archive above
+        // stays per-sample; consumers read either shape via forEachSample.
+        if (m_batch.x.isEmpty()) { m_batch.t0 = t; m_batch.seq0 = seq; m_batch.rate = rate; }
+        m_batch.x.append(x);
+        m_batch.y.append(y);
+        m_batch.z.append(z);
+        if (m_batch.x.size() >= m_cfg.batch) flushBatch();
+    }
+
+    // Publish the accumulated samples as one batched raw message.
+    void flushBatch() {
+        if (m_batch.x.isEmpty()) return;
         QVariantMap h;
         h["v"]          = 1;
         h["type"]       = "raw";
         h["station"]    = m_cfg.station;
         h["object"]     = m_cfg.object;
         h["sensor"]     = m_cfg.sensor;
-        h["t"]          = static_cast<qlonglong>(t);
-        h["x"]          = x;
-        h["y"]          = y;
-        h["z"]          = z;
-        h["seq"]        = static_cast<qulonglong>(seq);
-        h["sampleRate"] = rate;
-        publish(m_topic, h);               // payload empty: sample fits in the header
-        ++m_published;
+        h["t"]          = static_cast<qlonglong>(m_batch.t0);   // time of first sample
+        h["xs"]         = m_batch.x;
+        h["ys"]         = m_batch.y;
+        h["zs"]         = m_batch.z;
+        h["seq"]        = static_cast<qulonglong>(m_batch.seq0);
+        h["sampleRate"] = m_batch.rate;
+        publish(m_topic, h);
+        m_published += m_batch.x.size();
+        m_batch.x.clear(); m_batch.y.clear(); m_batch.z.clear();
     }
 
     // ── Synthetic source (--sim) ─────────────────────────────────────────────
@@ -238,6 +254,7 @@ private:
     }
 
     void printStats() {
+        flushBatch();                       // don't let a partial batch linger
         if (m_recOut.device()) m_recOut.flush();
         if (m_tds) m_tds->flushAll();
         if (m_cfg.useSim || m_cfg.useReplay) {
@@ -298,6 +315,10 @@ private:
     std::vector<Rec> m_recs;
     std::size_t m_idx = 0;
     quint64 m_seq = 0, m_published = 0;
+
+    // Pending bus batch (accumulated by publishSample, sent by flushBatch).
+    struct Batch { QVariantList x, y, z; qint64 t0 = 0; quint64 seq0 = 0; quint32 rate = 200; };
+    Batch m_batch;
     double  m_ph = 0.0, m_nextTs = 0.0;
 };
 
@@ -331,9 +352,10 @@ int main(int argc, char* argv[]) {
     QCommandLineOption kindOpt   ("kind",       "Instrument: accelerometer | seismometer", "kind", "accelerometer");
     QCommandLineOption cornerOpt ("corner",     "Sensor corner period (s); >=10 => broadband band code", "sec", "1e9");
     QCommandLineOption recSampOpt("record-samples","miniSEED samples buffered before flush (fill vs latency)", "n", "1000");
+    QCommandLineOption batchOpt  ("batch",       "Bus samples per message (cuts message rate; 1 = per-sample)", "n", "20");
     parser.addOptions({portOpt, masterOpt, queueOpt, simOpt, simEventsOpt, rateOpt, replayOpt, historicOpt,
                        speedOpt, recordOpt, archiveOpt, bufferOpt, baudOpt, stationOpt, objectOpt, sensorOpt,
-                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt});
+                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt, batchOpt});
     parser.process(app);
 
     Config cfg;
@@ -345,6 +367,7 @@ int main(int argc, char* argv[]) {
     cfg.kind        = parser.value(kindOpt);
     cfg.cornerPeriod= parser.value(cornerOpt).toDouble();
     cfg.recordSamples = std::max(8, parser.value(recSampOpt).toInt());
+    cfg.batch         = std::max(1, parser.value(batchOpt).toInt());
     cfg.simRate    = std::max(1u, parser.value(rateOpt).toUInt());
     cfg.useSim     = parser.isSet(simOpt);
     cfg.simEvents  = parser.isSet(simEventsOpt);

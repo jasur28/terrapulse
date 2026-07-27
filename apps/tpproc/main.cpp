@@ -5,6 +5,7 @@
 
 #include "proc/ProcPipeline.h"
 #include "terrapulse/client/application.h"
+#include "terrapulse/messaging/rawsamples.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
@@ -104,13 +105,12 @@ protected:
             }
         }
 
-        m_pipe.addSample(h.value("station").toUInt(), hObj, hSen,
-                         h.value("x").toDouble(),
-                         h.value("y").toDouble(),
-                         h.value("z").toDouble(),
-                         h.value("t").toLongLong(),
-                         h.value("sampleRate").toUInt());
-        ++m_rawIn;
+        const quint32 sta  = h.value("station").toUInt();
+        const quint32 rate = h.value("sampleRate").toUInt();
+        tp::messaging::forEachSample(h, [&](double x, double y, double z, qint64 t, int) {
+            m_pipe.addSample(sta, hObj, hSen, x, y, z, t, rate);
+            ++m_rawIn;
+        });
     }
 
     void handleSOH() override {

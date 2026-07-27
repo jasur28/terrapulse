@@ -9,6 +9,7 @@
 
 #include "analysis/StrongMotion.h"
 #include "terrapulse/client/application.h"
+#include "terrapulse/messaging/rawsamples.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
@@ -66,12 +67,14 @@ protected:
         Buf& b = m_bufs[key];
         b.station = h.value("station").toUInt();
         b.rate    = h.value("sampleRate").toDouble() > 0 ? h.value("sampleRate").toDouble() : 200.0;
-        b.lastT   = h.value("t").toLongLong();
-        b.x.push_back(float(h.value("x").toDouble()));
-        b.y.push_back(float(h.value("y").toDouble()));
-        b.z.push_back(float(h.value("z").toDouble()));
         const std::size_t cap = std::size_t(b.rate * m_windowSec);
-        while (b.x.size() > cap) { b.x.pop_front(); b.y.pop_front(); b.z.pop_front(); }
+        tp::messaging::forEachSample(h, [&](double x, double y, double z, qint64 t, int) {
+            b.lastT = t;
+            b.x.push_back(float(x));
+            b.y.push_back(float(y));
+            b.z.push_back(float(z));
+            while (b.x.size() > cap) { b.x.pop_front(); b.y.pop_front(); b.z.pop_front(); }
+        });
     }
 
     void handleSOH() override {

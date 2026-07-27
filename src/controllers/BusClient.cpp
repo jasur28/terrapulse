@@ -1,5 +1,6 @@
 #include "controllers/BusClient.h"
 #include "bus/BusMessage.h"
+#include "terrapulse/messaging/rawsamples.h"
 #include <QDateTime>
 
 BusClient::BusClient(const std::string& endpoint, const std::string& prefix, QObject* parent)
@@ -33,15 +34,16 @@ void BusClient::poll() {
         m_object     = h.value("object").toUInt();
         m_sensor     = h.value("sensor").toUInt();
         m_sampleRate = h.value("sampleRate").toDouble();
-        m_lastX      = h.value("x").toDouble();
-        m_lastY      = h.value("y").toDouble();
-        m_lastZ      = h.value("z").toDouble();
-        const qint64 t = h.value("t").toLongLong();
-        m_lastTimestamp = QDateTime::fromMSecsSinceEpoch(t).toString("yyyy-MM-dd HH:mm:ss.zzz");
+        // The live GUI shows the newest value; take the last sample of a batch.
+        qint64 lastT = h.value("t").toLongLong();
+        tp::messaging::forEachSample(h, [&](double x, double y, double z, qint64 t, int) {
+            m_lastX = x; m_lastY = y; m_lastZ = z; lastT = t;
+        });
+        m_lastTimestamp = QDateTime::fromMSecsSinceEpoch(lastT).toString("yyyy-MM-dd HH:mm:ss.zzz");
         ++m_packetCount;
 
         QVariantMap sample;
-        sample["timestampMs"] = t;
+        sample["timestampMs"] = lastT;
         sample["sampleRate"]  = m_sampleRate > 0.0 ? m_sampleRate : 100;
         sample["x"]           = m_lastX;
         sample["y"]           = m_lastY;

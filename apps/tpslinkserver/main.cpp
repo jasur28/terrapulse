@@ -12,6 +12,7 @@
 #include "slink/SeedLinkRing.h"
 #include "mseed/Mseed.h"
 #include "terrapulse/client/application.h"
+#include "terrapulse/messaging/rawsamples.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
@@ -66,11 +67,12 @@ protected:
         if (!topic.startsWith("raw.")) return;
         const quint32 obj = h.value("object").toUInt();
         const quint32 sen = h.value("sensor").toUInt();
-        const qint64  t   = h.value("t").toLongLong();
         const double  rate= h.value("sampleRate").toDouble() > 0 ? h.value("sampleRate").toDouble() : 200.0;
-        const double  xyz[3] = { h.value("x").toDouble(), h.value("y").toDouble(), h.value("z").toDouble() };
-        for (int comp = 0; comp < 3; ++comp)
-            feed(obj, sen, comp, static_cast<int32_t>(std::lround(xyz[comp] * 10000.0)), t, rate);
+        tp::messaging::forEachSample(h, [&](double x, double y, double z, qint64 t, int) {
+            const double xyz[3] = { x, y, z };
+            for (int comp = 0; comp < 3; ++comp)
+                feed(obj, sen, comp, static_cast<int32_t>(std::lround(xyz[comp] * 10000.0)), t, rate);
+        });
     }
 
 private:

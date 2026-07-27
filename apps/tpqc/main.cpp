@@ -10,6 +10,7 @@
 //   tpqc [--master host] [--queue name] [--period-sec 5]
 
 #include "terrapulse/client/application.h"
+#include "terrapulse/messaging/rawsamples.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
@@ -75,34 +76,33 @@ protected:
         q.station = h.value("station").toUInt();
         const double rate = h.value("sampleRate").toDouble();
         if (rate > 0) q.rate = rate;
-        const qint64 t = h.value("t").toLongLong();
 
-        // Gap: a jump larger than 1.5 sample periods (allows normal jitter).
-        if (q.lastT > 0 && q.rate > 0) {
-            const double dt = 1000.0 / q.rate;
-            if (double(t - q.lastT) > dt * 1.5) ++q.gaps;
-        }
-        q.lastT = t;
-        ++q.samples;
+        tp::messaging::forEachSample(h, [&](double x, double y, double z, qint64 t, int) {
+            // Gap: a jump larger than 1.5 sample periods (allows normal jitter).
+            if (q.lastT > 0 && q.rate > 0) {
+                const double dt = 1000.0 / q.rate;
+                if (double(t - q.lastT) > dt * 1.5) ++q.gaps;
+            }
+            q.lastT = t;
+            ++q.samples;
 
-        // Latency: how far behind real time the data arrives.
-        const double lat = double(now - t);
-        q.latencySum += lat; ++q.latencyN;
-        q.maxLatency = std::max(q.maxLatency, lat);
+            // Latency: how far behind real time the data arrives.
+            const double lat = double(now - t);
+            q.latencySum += lat; ++q.latencyN;
+            q.maxLatency = std::max(q.maxLatency, lat);
 
-        // Spike: vector magnitude far outside the running distribution
-        // (Welford running mean/variance).
-        const double x = h.value("x").toDouble(), y = h.value("y").toDouble(),
-                     z = h.value("z").toDouble();
-        const double mag = std::sqrt(x*x + y*y + z*z);
-        ++q.n;
-        const double d = mag - q.mean;
-        q.mean += d / double(q.n);
-        q.m2   += d * (mag - q.mean);
-        if (q.n > 50) {
-            const double sigma = std::sqrt(q.m2 / double(q.n - 1));
-            if (sigma > 1e-9 && std::fabs(mag - q.mean) > m_spikeSigma * sigma) ++q.spikes;
-        }
+            // Spike: vector magnitude far outside the running distribution
+            // (Welford running mean/variance).
+            const double mag = std::sqrt(x*x + y*y + z*z);
+            ++q.n;
+            const double d = mag - q.mean;
+            q.mean += d / double(q.n);
+            q.m2   += d * (mag - q.mean);
+            if (q.n > 50) {
+                const double sigma = std::sqrt(q.m2 / double(q.n - 1));
+                if (sigma > 1e-9 && std::fabs(mag - q.mean) > m_spikeSigma * sigma) ++q.spikes;
+            }
+        });
     }
 
 private:
