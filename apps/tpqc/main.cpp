@@ -77,6 +77,7 @@ public:
         QVariantMap c;
         c["published"] = static_cast<qulonglong>(m_published);
         c["sensors"]   = m_stats.size();
+        if (m_wf) c["unresolved"] = static_cast<qulonglong>(m_wf->unresolved());
         return c;
     }
 

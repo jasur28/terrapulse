@@ -5,9 +5,11 @@
 // three months into an archive.
 
 #include "mseed/StreamId.h"
+#include "mseed/Mseed.h"
 
 #include <cstdio>
 #include <string>
+#include <unordered_map>
 
 using namespace tp::mseed;
 
@@ -73,6 +75,33 @@ int main() {
     // Guard rails the limits exist for. "TOWERA" (6 chars) must be rejected.
     expectReject("station too long", makeStreamId("UZ","TOWERA",1,Instrument::Accelerometer,200,kA,0));
     expectReject("network too long", makeStreamId("UZB","BRDG1",1, Instrument::Accelerometer,200,kA,0));
+
+    // ── resolveSourceId: the FDSN/inventory mapping the backbone depends on ──
+    // (docs/АРХИТЕКТУРА §14; the bug where FDSN streams were silently dropped.)
+    {
+        auto rs = [&](const char* what, const std::string& sid,
+                      const std::unordered_map<std::string,uint32_t>& map,
+                      bool wantOk, uint32_t wo = 0, uint32_t ws = 0, int wc = -1) {
+            uint32_t o = 0, s = 0; int c = -1;
+            const bool ok = resolveSourceId(sid, map, o, s, c);
+            bool pass = (ok == wantOk) && (!wantOk || (o == wo && s == ws && c == wc));
+            const std::string detail = ok ? (std::to_string(o) + "/" + std::to_string(s) + "/" + std::to_string(c))
+                                          : std::string("rejected");
+            std::printf("%-4s %-42s %s\n", pass ? "ok" : "FAIL", what, detail.c_str());
+            if (!pass) ++failures;
+        };
+        const std::unordered_map<std::string,uint32_t> empty;
+        const std::unordered_map<std::string,uint32_t> inv{ {"UZ_BRDG1", 5} };
+
+        // Legacy numeric id resolves with no map: station=object, location=sensor.
+        rs("legacy TP_1_07_H_N_Z", "FDSN:TP_1_07_H_N_Z", empty, true, 1, 7, 2);
+        // FDSN id resolves via the station map; sensor still from numeric location.
+        rs("FDSN UZ_BRDG1_07 (mapped)", "FDSN:UZ_BRDG1_07_H_N_Z", inv, true, 5, 7, 2);
+        rs("FDSN UZ_BRDG1_03 X axis",  "FDSN:UZ_BRDG1_03_H_N_X", inv, true, 5, 3, 0);
+        // FDSN id with an unknown station must FAIL (never silently mapped to 0).
+        rs("FDSN unknown station",     "FDSN:UZ_TOWRA_01_H_N_Z", inv, false);
+        rs("FDSN, no map at all",      "FDSN:UZ_BRDG1_07_H_N_Z", empty, false);
+    }
 
     std::printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures==1?"":"s");
     return failures ? 1 : 0;

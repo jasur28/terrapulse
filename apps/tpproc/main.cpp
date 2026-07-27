@@ -92,6 +92,7 @@ public:
         c["windows"] = m_pipe.windowsProcessed();
         c["saf"]     = static_cast<qulonglong>(m_safOut);
         c["shf"]     = static_cast<qulonglong>(m_shfOut);
+        if (m_wf) c["unresolved"] = static_cast<qulonglong>(m_wf->unresolved());
         return c;
     }
 

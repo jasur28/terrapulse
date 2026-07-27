@@ -85,6 +85,7 @@ public:
         c["clients"]  = int(m_clients.size());
         c["packets"]  = static_cast<qulonglong>(m_ring.produced());
         c["channels"] = int(m_chans.size());
+        if (m_archive) c["archiveUnresolved"] = static_cast<qulonglong>(m_archiveUnresolved);
         return c;
     }
 
