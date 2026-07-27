@@ -6,34 +6,35 @@ namespace tp {
 void ProcPipeline::addSample(uint32_t station, uint32_t object, uint32_t sensor,
                              double x, double y, double z,
                              int64_t tMs, uint32_t sampleRate) {
-    if (m_bufX.empty()) {
-        m_windowStartMs = tMs;
-        m_samplingRate  = sampleRate > 0 ? sampleRate : 100;
-        m_station = station;
-        m_object  = object;
-        m_sensor  = sensor;
+    Window& w = m_windows[(static_cast<uint64_t>(object) << 32) | sensor];
+    if (w.x.empty()) {
+        w.startMs = tMs;
+        w.rate    = sampleRate > 0 ? sampleRate : 100;
+        w.station = station;
+        w.object  = object;
+        w.sensor  = sensor;
     }
-    m_bufX.push_back(static_cast<float>(x));
-    m_bufY.push_back(static_cast<float>(y));
-    m_bufZ.push_back(static_cast<float>(z));
-    m_windowEndMs = tMs;
+    w.x.push_back(static_cast<float>(x));
+    w.y.push_back(static_cast<float>(y));
+    w.z.push_back(static_cast<float>(z));
+    w.endMs = tMs;
 
-    if (static_cast<int>(m_bufX.size()) >= m_windowSize)
-        flushWindow();
+    if (static_cast<int>(w.x.size()) >= m_windowSize)
+        flushWindow(w);
 }
 
-void ProcPipeline::flushWindow() {
+void ProcPipeline::flushWindow(Window& w) {
     ++m_windowsProcessed;
 
     auto makeSdf = [&](Axis axis, const std::vector<float>& data) {
         SdfRecord sdf;
-        sdf.stationId    = m_station;
-        sdf.objectId     = m_object;
-        sdf.sensorId     = m_sensor;
+        sdf.stationId    = w.station;
+        sdf.objectId     = w.object;
+        sdf.sensorId     = w.sensor;
         sdf.component    = axis;
-        sdf.samplingRate = m_samplingRate;
-        sdf.startTime    = m_windowStartMs;
-        sdf.endTime      = m_windowEndMs;
+        sdf.samplingRate = w.rate;
+        sdf.startTime    = w.startMs;
+        sdf.endTime      = w.endMs;
         sdf.waveformData = data;
         sdf.sampleCount  = static_cast<uint32_t>(data.size());
         sdf.updateCrc();
@@ -42,9 +43,9 @@ void ProcPipeline::flushWindow() {
 
     struct AxisEntry { Axis axis; const std::vector<float>& buf; };
     const AxisEntry axes[] = {
-        {Axis::X, m_bufX},
-        {Axis::Y, m_bufY},
-        {Axis::Z, m_bufZ}
+        {Axis::X, w.x},
+        {Axis::Y, w.y},
+        {Axis::Z, w.z}
     };
 
     for (const auto& a : axes) {
@@ -52,14 +53,14 @@ void ProcPipeline::flushWindow() {
 
         // Judge this axis against ITS OWN learned baseline, starting from the
         // configured thresholds.
-        const uint64_t key = (static_cast<uint64_t>(m_object) << 40)
-                           | (static_cast<uint64_t>(m_sensor) << 8)
+        const uint64_t key = (static_cast<uint64_t>(w.object) << 40)
+                           | (static_cast<uint64_t>(w.sensor) << 8)
                            | static_cast<uint64_t>(a.axis);
         auto bIt = m_baseline.find(key);
         if (bIt == m_baseline.end()) {
             BaselineState fresh;
             // A binding profile for this sensor wins over the global thresholds.
-            const auto sIt = m_sensorThresholds.find((uint64_t(m_object) << 32) | m_sensor);
+            const auto sIt = m_sensorThresholds.find((uint64_t(w.object) << 32) | w.sensor);
             fresh.th = sIt != m_sensorThresholds.end() ? sIt->second : m_baseThresholds;
             bIt = m_baseline.emplace(key, fresh).first;
         }
@@ -74,7 +75,7 @@ void ProcPipeline::flushWindow() {
         while (fb.size() > m_freqBufLen) fb.pop_front();
         if (fb.size() >= 256) {
             const std::vector<float> fv(fb.begin(), fb.end());
-            const double f = spec::dominantFrequency(fv, m_samplingRate, m_freqMin, m_freqMax);
+            const double f = spec::dominantFrequency(fv, w.rate, m_freqMin, m_freqMax);
             if (f > 0.0) {
                 saf.dominantFrequency = static_cast<float>(f);
                 saf.frequencyShift    = b.th.baselineFreq > 0.0f
@@ -128,13 +129,16 @@ void ProcPipeline::flushWindow() {
         if (onSaf) onSaf(sv);
 
         auto shfOpt = m_history.processSaf(saf);
-        if (shfOpt.has_value() && onShf)
-            onShf(toVariant(*shfOpt));
+        if (shfOpt.has_value() && onShf) {
+            QVariantMap shv = toVariant(*shfOpt);
+            shv["stationId"] = static_cast<quint32>(w.station);
+            onShf(shv);
+        }
     }
 
-    m_bufX.clear();
-    m_bufY.clear();
-    m_bufZ.clear();
+    w.x.clear();
+    w.y.clear();
+    w.z.clear();
 }
 
 // ── Variant conversion ─────────────────────────────────────────────────────
@@ -163,7 +167,7 @@ QVariantMap ProcPipeline::toVariant(const SafRecord& s) const {
 
 QVariantMap ProcPipeline::toVariant(const ShfRecord& s) const {
     QVariantMap m;
-    m["stationId"]        = static_cast<quint32>(m_station);
+    m["stationId"]        = static_cast<quint32>(s.objectId);  // caller overrides with the window's station
     m["shfId"]            = static_cast<qulonglong>(s.shfId);
     m["objectId"]         = static_cast<quint32>(s.objectId);
     m["sensorId"]         = static_cast<quint32>(s.sensorId);

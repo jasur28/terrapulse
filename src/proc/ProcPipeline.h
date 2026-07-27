@@ -59,8 +59,8 @@ public:
         if (offRatio > 0) m_offRatio = offRatio;
     }
 
-    // Feed one raw sample. Identity travels with each sample so a single
-    // pipeline can be retargeted, though typically one pipeline == one sensor.
+    // Feed one raw sample. Each (object,sensor) gets its OWN window buffer, so a
+    // single pipeline can serve many sensors without mixing their samples.
     void addSample(uint32_t station, uint32_t object, uint32_t sensor,
                    double x, double y, double z,
                    int64_t tMs, uint32_t sampleRate);
@@ -69,7 +69,17 @@ public:
     MapCallback onShf;
 
 private:
-    void flushWindow();
+    // One accumulating window per sensor. Keyed by object<<32|sensor so samples
+    // from different accelerometers never land in the same window (SeisComp
+    // processes per stream/channel — mixing streams corrupts the analysis).
+    struct Window {
+        std::vector<float> x, y, z;
+        int64_t  startMs = 0, endMs = 0;
+        uint32_t rate = 100, station = 1, object = 1, sensor = 1;
+    };
+    std::unordered_map<uint64_t, Window> m_windows;
+
+    void flushWindow(Window& w);
     QVariantMap toVariant(const SafRecord& s) const;
     QVariantMap toVariant(const ShfRecord& s) const;
 
@@ -124,12 +134,6 @@ private:
     int      m_windowSize       = 100;
     int      m_windowsProcessed = 0;
     uint64_t m_safCounter       = 1;
-
-    std::vector<float> m_bufX, m_bufY, m_bufZ;
-    int64_t  m_windowStartMs = 0;
-    int64_t  m_windowEndMs   = 0;
-    uint32_t m_samplingRate  = 100;
-    uint32_t m_station = 1, m_object = 1, m_sensor = 1;
 };
 
 } // namespace tp
