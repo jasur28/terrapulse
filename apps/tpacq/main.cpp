@@ -57,7 +57,9 @@ struct Config {
     QString slinkHost;            // --slink host:port: push miniSEED records to a
     quint16 slinkPort = 0;        // tpslinkserver feed (waveform backbone, no bus)
     bool    noBus = false;        // --no-bus: don't publish raw. to the broker at
-};                                // all (pure backbone; only when no GUI needs it)
+                                  // all (pure backbone; only when no GUI needs it)
+    int     feedBacklog = 20000;  // --feed-backlog: max records held during a feed
+};                                // outage before the oldest are dropped (counted)
 
 class AcqApplication : public tp::client::Application {
 public:
@@ -93,7 +95,12 @@ public:
                     const auto r = tp::mseed::makeStreamId(
                         m_cfg.network.toStdString(), m_cfg.stationCode.toStdString(),
                         m_cfg.sensor, kind, m_cfg.simRate, m_cfg.cornerPeriod, comp);
-                    if (r.ok) m_feedSid[comp] = r.id.sourceId();
+                    if (!r.ok) {   // same hard rule as the archive: reject at input
+                        std::fprintf(stderr, "[tpacq] FATAL: cannot build feed identity "
+                                     "(comp %d): %s\n", comp, r.error.c_str());
+                        return false;
+                    }
+                    m_feedSid[comp] = r.id.sourceId();
                 }
             }
             connectFeed();
@@ -245,7 +252,6 @@ private:
     std::string m_feedSid[3];               // resolved FDSN id per component (empty = legacy)
     QTcpSocket  m_feedSock;
     std::deque<QByteArray> m_feedBacklog;   // records waiting to go out (no-loss on reconnect)
-    static constexpr std::size_t kFeedBacklogMax = 20000;   // ~ generous outage window
     quint64 m_feedDropped = 0, m_reconnects = 0, m_seqLost = 0;
     quint64 m_lastDevSeq = 0; bool m_haveDevSeq = false;
 
@@ -277,7 +283,7 @@ private:
                           [this](const char* rec, int len) {
                               if (len != 512) return;
                               m_feedBacklog.emplace_back(rec, 512);
-                              while (m_feedBacklog.size() > kFeedBacklogMax) {
+                              while (m_feedBacklog.size() > std::size_t(m_cfg.feedBacklog)) {
                                   m_feedBacklog.pop_front();   // outage longer than the backlog
                                   ++m_feedDropped;
                               }
@@ -287,11 +293,15 @@ private:
     }
 
     // Send as much of the backlog as the socket will take, oldest first.
+    // QTcpSocket::write() copies the whole buffer into its own write queue and
+    // returns the full length (or -1 on error) — it never does a partial write —
+    // so a record is either fully queued (pop it) or the link errored (stop and
+    // wait for the reconnect; the record stays intact at the front of backlog).
     void drainFeed() {
         if (m_feedSock.state() != QAbstractSocket::ConnectedState) return;
         while (!m_feedBacklog.empty()) {
             const QByteArray& rec = m_feedBacklog.front();
-            if (m_feedSock.write(rec) != rec.size()) break;   // socket buffer full: try later
+            if (m_feedSock.write(rec) != rec.size()) break;   // error: keep record, retry later
             m_feedBacklog.pop_front();
         }
     }
@@ -473,9 +483,11 @@ int main(int argc, char* argv[]) {
                                   "(waveform backbone, no broker)", "host:port", "");
     QCommandLineOption noBusOpt  ("no-bus",      "With --slink: do NOT publish raw. to the broker at all "
                                   "(pure backbone; use only when no GUI needs the bus)");
+    QCommandLineOption backlogOpt("feed-backlog","Max miniSEED records held during a --slink outage "
+                                  "before the oldest are dropped", "n", "20000");
     parser.addOptions({portOpt, masterOpt, queueOpt, simOpt, simEventsOpt, rateOpt, replayOpt, historicOpt,
                        speedOpt, recordOpt, archiveOpt, bufferOpt, baudOpt, stationOpt, objectOpt, sensorOpt,
-                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt, batchOpt, slinkOpt, noBusOpt});
+                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt, batchOpt, slinkOpt, noBusOpt, backlogOpt});
     parser.process(app);
 
     Config cfg;
@@ -494,6 +506,7 @@ int main(int argc, char* argv[]) {
         cfg.slinkPort = quint16(colon > 0 ? sl.mid(colon + 1).toUInt() : 18001);
     }
     cfg.noBus = parser.isSet(noBusOpt);
+    cfg.feedBacklog = std::max(1, parser.value(backlogOpt).toInt());
     cfg.simRate    = std::max(1u, parser.value(rateOpt).toUInt());
     cfg.useSim     = parser.isSet(simOpt);
     cfg.simEvents  = parser.isSet(simEventsOpt);
