@@ -115,6 +115,7 @@ add_test(NAME filter COMMAND test_filter)
 add_executable(test_streammonitor tests/test_streammonitor.cpp)
 target_link_libraries(test_streammonitor PRIVATE tpfilter)
 add_test(NAME streammonitor COMMAND test_streammonitor)
+# test_procpipeline needs tp_backend (defined later) — added after it below.
 
 # ── tpdump — inspect archived waveforms via a RecordStream URI ─────────────────
 add_executable(tpdump tools/tpdump.cpp)
@@ -342,6 +343,13 @@ add_library(tp_backend STATIC
 )
 target_include_directories(tp_backend PUBLIC src)
 target_link_libraries(tp_backend PUBLIC Qt6::Core kissfft)
+
+# Structural detector end to end (Поток 2): quiet -> no false alarm, burst ->
+# STA/LTA trip. Needs tp_backend (analysis/history), defined just above.
+add_executable(test_procpipeline tests/test_procpipeline.cpp src/proc/ProcPipeline.cpp)
+target_include_directories(test_procpipeline PRIVATE src)
+target_link_libraries(test_procpipeline PRIVATE tp_backend Qt6::Core)
+add_test(NAME procpipeline COMMAND test_procpipeline)
 
 # ── Main executable ───────────────────────────────────────────────────────────
 qt_add_executable(appTerraPulse
