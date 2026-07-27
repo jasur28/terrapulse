@@ -11,9 +11,9 @@ Rectangle {
     property string connectionText: "localhost"
     default property alias tools: toolRow.data
 
-    height: 48
-    color: Theme.surface
-    border.color: Theme.border
+    height: 50
+    color: "#eeeeee"
+    border.color: "#a6a6a6"
 
     ColumnLayout {
         anchors.fill: parent
@@ -29,7 +29,7 @@ Rectangle {
                 Rectangle {
                     Layout.preferredWidth: Math.max(54, label.implicitWidth + 18)
                     Layout.fillHeight: true
-                    color: mouse.containsMouse ? "#dbe8f6" : "transparent"
+                    color: mouse.containsMouse ? "#d8eafa" : "transparent"
 
                     Text {
                         id: label
@@ -53,18 +53,18 @@ Rectangle {
             }
         }
 
-        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Theme.border }
+        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#b9b9b9" }
 
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.leftMargin: 6
-            Layout.rightMargin: 6
-            spacing: 5
+            Layout.leftMargin: 8
+            Layout.rightMargin: 8
+            spacing: 4
 
             RowLayout {
                 id: toolRow
-                spacing: 5
+                spacing: 4
             }
 
             Item { Layout.fillWidth: true }

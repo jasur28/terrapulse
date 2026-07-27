@@ -5,6 +5,7 @@
 
 #include "proc/ProcPipeline.h"
 #include "proc/Filter.h"
+#include "proc/StreamMonitor.h"
 #include "terrapulse/client/application.h"
 #include "terrapulse/messaging/rawsamples.h"
 #include "terrapulse/messaging/inventorymap.h"
@@ -95,6 +96,7 @@ public:
         c["windows"] = m_pipe.windowsProcessed();
         c["saf"]     = static_cast<qulonglong>(m_safOut);
         c["shf"]     = static_cast<qulonglong>(m_shfOut);
+        c["streamFaults"] = static_cast<qulonglong>(m_streamFaults);   // gap/overlap/dup/clip/rate
         if (m_wf) c["unresolved"] = static_cast<qulonglong>(m_wf->unresolved());
         return c;
     }
@@ -104,15 +106,33 @@ public:
     // profile on first sight.
     void feedTriple(quint32 sta, quint32 obj, quint32 sen,
                     double x, double y, double z, qint64 t, quint32 rate) {
+        const quint64 key = (quint64(obj) << 32) | sen;
+
+        // Stream integrity FIRST, on the raw sample: a gap/overlap/rate change
+        // means the stream broke, so we reset the filter (an IIR would ring
+        // across a gap) — the module is no longer blind to a bad stream.
+        Mon& mon = m_monitors[key];
+        const double raw[3] = { x, y, z };
+        bool broke = false;
+        for (int i = 0; i < 3; ++i) {
+            const auto s = mon.m[i].feed(raw[i], t, rate);
+            if (s != tp::proc::StreamStatus::Ok) {
+                ++m_streamFaults;
+                if (s == tp::proc::StreamStatus::Gap || s == tp::proc::StreamStatus::Overlap ||
+                    s == tp::proc::StreamStatus::RateChanged) broke = true;
+            }
+        }
+
         // Optional filter chain (--filter "hp:0.3,lp:20"): condition the signal
         // before analysis. Per-channel state per sensor, built at the first rate.
         if (!m_filterSpec.isEmpty() && rate > 0) {
-            Filt& f = m_filters[(quint64(obj) << 32) | sen];
+            Filt& f = m_filters[key];
             if (!f.built) {
                 for (int i = 0; i < 3; ++i)
                     f.c[i] = tp::proc::FilterChain::fromSpec(m_filterSpec.toStdString(), rate);
                 f.built = true;
             }
+            if (broke) for (int i = 0; i < 3; ++i) f.c[i].reset();
             x = f.c[0].process(x); y = f.c[1].process(y); z = f.c[2].process(z);
         }
         applyBinding(obj, sen);
@@ -184,6 +204,10 @@ private:
     QString m_filterSpec;                       // --filter "hp:0.3,lp:20"
     struct Filt { tp::proc::FilterChain c[3]; bool built = false; };
     std::unordered_map<quint64, Filt> m_filters;   // per (object<<32|sensor)
+
+    struct Mon { tp::proc::StreamMonitor m[3]; };  // per-axis stream integrity
+    std::unordered_map<quint64, Mon> m_monitors;   // per (object<<32|sensor)
+    quint64 m_streamFaults = 0;
 };
 
 } // namespace

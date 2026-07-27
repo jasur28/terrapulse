@@ -10,8 +10,12 @@ Window {
     minimumWidth: 960
     minimumHeight: 600
     visible: true
-    title: "TerraPulse - Structural Health Monitor"
-           + (sessionQueue === "playback" ? "   PLAYBACK REVIEW (tpolv)" : "")
+    title: singleView
+           ? ((appView === "tprttv" || appView === "scrttv") ? "tprttv@terrapulse"
+              : (appView === "tpmap" || appView === "map") ? "tpmap@terrapulse"
+              : (appView === "tpolv" || appView === "scolv") ? "tpolv@terrapulse"
+              : "TerraPulse")
+           : "TerraPulse - Structural Health Monitor"
     color: Theme.background
 
     readonly property var navItems: [

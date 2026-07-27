@@ -10,9 +10,9 @@ Rectangle {
     property string rightText: ""
     property bool live: false
 
-    height: 24
-    color: Theme.navBg
-    border.color: Theme.border
+    height: 23
+    color: "#eeeeee"
+    border.color: "#b0b0b0"
 
     RowLayout {
         anchors.fill: parent
@@ -21,8 +21,8 @@ Rectangle {
         spacing: 10
 
         Rectangle {
-            Layout.preferredWidth: 9
-            Layout.preferredHeight: 9
+            Layout.preferredWidth: 8
+            Layout.preferredHeight: 8
             radius: 5
             color: root.live ? Theme.colorNormal : Theme.colorOffline
         }
@@ -38,7 +38,7 @@ Rectangle {
         Text {
             Layout.fillWidth: true
             text: root.centerText
-            color: Theme.textSecondary
+            color: "#333333"
             font.pixelSize: 11
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight

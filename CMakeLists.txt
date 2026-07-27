@@ -105,12 +105,16 @@ add_executable(test_seedlinkring tests/test_seedlinkring.cpp)
 target_link_libraries(test_seedlinkring PRIVATE tpslinkcore)
 add_test(NAME seedlinkring COMMAND test_seedlinkring)
 
-# Processing filter chain: streaming Butterworth biquads (Поток 2). Qt-free.
-add_library(tpfilter STATIC src/proc/Filter.cpp)
+# Processing framework core: streaming filters + per-stream integrity monitor
+# (Поток 2). Qt-free, so the tests need no Qt runtime.
+add_library(tpfilter STATIC src/proc/Filter.cpp src/proc/StreamMonitor.cpp)
 target_include_directories(tpfilter PUBLIC src)
 add_executable(test_filter tests/test_filter.cpp)
 target_link_libraries(test_filter PRIVATE tpfilter)
 add_test(NAME filter COMMAND test_filter)
+add_executable(test_streammonitor tests/test_streammonitor.cpp)
+target_link_libraries(test_streammonitor PRIVATE tpfilter)
+add_test(NAME streammonitor COMMAND test_streammonitor)
 
 # ── tpdump — inspect archived waveforms via a RecordStream URI ─────────────────
 add_executable(tpdump tools/tpdump.cpp)
@@ -372,6 +376,7 @@ qt_add_qml_module(appTerraPulse
         qml/components/Panel.qml
         qml/components/ClassicMenuBar.qml
         qml/components/ClassicStatusBar.qml
+        qml/components/ClassicToolButton.qml
         qml/components/MetricTile.qml
         qml/components/StatusPill.qml
         qml/components/HealthRing.qml
