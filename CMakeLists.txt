@@ -167,7 +167,7 @@ add_executable(tpacq
     src/serial/SerialStreamReceiver.cpp
 )
 target_include_directories(tpacq PRIVATE src)
-target_link_libraries(tpacq PRIVATE tpclient tpbus tpmseed Qt6::Core Qt6::SerialPort tpcfg)
+target_link_libraries(tpacq PRIVATE tpclient tpbus tpmseed Qt6::Core Qt6::SerialPort Qt6::Network tpcfg)
 
 # ── tpmon — bus debug monitor (subscribe + print) ─────────────────────────────
 add_executable(tpmon tools/tpmon.cpp)

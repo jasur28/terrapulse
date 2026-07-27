@@ -12,6 +12,7 @@
 #include "serial/SerialStreamReceiver.h"
 #include "mseed/TdsArchive.h"
 #include "mseed/StreamId.h"
+#include "mseed/Mseed.h"
 #include "terrapulse/client/application.h"
 
 #include <QCoreApplication>
@@ -19,9 +20,11 @@
 #include <QDateTime>
 #include <QFile>
 #include <QStringList>
+#include <QTcpSocket>
 #include <QTextStream>
 #include <QTimer>
 #include <QVariantList>
+#include <unordered_map>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -50,6 +53,8 @@ struct Config {
     double  cornerPeriod = 1e9;   // >=10 s => broadband band code (accelerometer)
     int     recordSamples = 1000; // miniSEED buffer before flush (fill vs latency)
     int     batch = 20;           // bus samples per message (1 = per-sample)
+    QString slinkHost;            // --slink host:port: push miniSEED records to a
+    quint16 slinkPort = 0;        // tpslinkserver feed (waveform backbone, no bus)
 };
 
 class AcqApplication : public tp::client::Application {
@@ -74,6 +79,14 @@ public:
             m_tds = std::make_unique<tp::mseed::TdsArchive>(
                 m_cfg.archiveDir.toStdString(), m_cfg.recordSamples);
             if (!bindArchiveIdentity()) return false;   // refuse rather than archive nothing
+        }
+        if (m_cfg.slinkPort) {
+            connectFeed();
+            QObject::connect(&m_feedSock, &QTcpSocket::disconnected, [this]() {
+                QTimer::singleShot(2000, [this]() { connectFeed(); });   // reconnect
+            });
+            std::printf("[tpacq] waveform feed -> %s:%u (records, no bus)\n",
+                        m_cfg.slinkHost.toUtf8().constData(), m_cfg.slinkPort);
         }
 
         m_serial.setBaudRate(m_cfg.baud);
@@ -158,6 +171,11 @@ private:
             m_tds->addSample(m_cfg.object, m_cfg.sensor, 1, static_cast<int32_t>(std::lround(y * 10000.0)), t, rate);
             m_tds->addSample(m_cfg.object, m_cfg.sensor, 2, static_cast<int32_t>(std::lround(z * 10000.0)), t, rate);
         }
+        if (m_cfg.slinkPort) {             // waveform backbone: pack records, push to feed
+            feedRecord(0, static_cast<int32_t>(std::lround(x * 10000.0)), t, rate);
+            feedRecord(1, static_cast<int32_t>(std::lround(y * 10000.0)), t, rate);
+            feedRecord(2, static_cast<int32_t>(std::lround(z * 10000.0)), t, rate);
+        }
         // Batch the BUS publish: accumulate N samples into one raw message to cut
         // the message rate ~N-fold (docs/МАСШТАБИРОВАНИЕ §3a). The archive above
         // stays per-sample; consumers read either shape via forEachSample.
@@ -186,6 +204,37 @@ private:
         publish(m_topic, h);
         m_published += m_batch.x.size();
         m_batch.x.clear(); m_batch.y.clear(); m_batch.z.clear();
+    }
+
+    // Waveform backbone feed (--slink): per-component record accumulation + socket.
+    struct FeedChan { std::string sid; double rate = 0.0; int64_t startMs = 0; std::vector<int32_t> buf; };
+    std::unordered_map<int, FeedChan> m_feed;
+    QTcpSocket m_feedSock;
+
+    void connectFeed() {
+        m_feedSock.abort();
+        m_feedSock.connectToHost(m_cfg.slinkHost, m_cfg.slinkPort);
+    }
+
+    // ── Waveform backbone feed: pack samples into miniSEED records and push them
+    // straight to the tpslinkserver feed, bypassing the message bus (Level 2). ──
+    void feedRecord(int comp, int32_t v, int64_t t, double rate) {
+        FeedChan& c = m_feed[comp];
+        if (c.buf.empty()) {
+            c.sid = tp::mseed::sourceId(m_cfg.object, m_cfg.sensor, comp);
+            c.rate = rate; c.startMs = t;
+        }
+        c.buf.push_back(v);
+        if (int(c.buf.size()) >= m_cfg.recordSamples) flushFeedChan(c);
+    }
+
+    void flushFeedChan(FeedChan& c) {
+        if (c.buf.empty() || m_feedSock.state() != QAbstractSocket::ConnectedState) { c.buf.clear(); return; }
+        tp::mseed::encode(c.sid, c.rate, c.startMs, c.buf,
+                          [this](const char* rec, int len) {
+                              if (len == 512) m_feedSock.write(rec, 512);
+                          });
+        c.buf.clear();
     }
 
     // ── Synthetic source (--sim) ─────────────────────────────────────────────
@@ -319,6 +368,7 @@ private:
     // Pending bus batch (accumulated by publishSample, sent by flushBatch).
     struct Batch { QVariantList x, y, z; qint64 t0 = 0; quint64 seq0 = 0; quint32 rate = 200; };
     Batch m_batch;
+
     double  m_ph = 0.0, m_nextTs = 0.0;
 };
 
@@ -353,9 +403,11 @@ int main(int argc, char* argv[]) {
     QCommandLineOption cornerOpt ("corner",     "Sensor corner period (s); >=10 => broadband band code", "sec", "1e9");
     QCommandLineOption recSampOpt("record-samples","miniSEED samples buffered before flush (fill vs latency)", "n", "1000");
     QCommandLineOption batchOpt  ("batch",       "Bus samples per message (cuts message rate; 1 = per-sample)", "n", "20");
+    QCommandLineOption slinkOpt  ("slink",       "Push miniSEED records to a tpslinkserver feed host:port "
+                                  "(waveform backbone, no broker)", "host:port", "");
     parser.addOptions({portOpt, masterOpt, queueOpt, simOpt, simEventsOpt, rateOpt, replayOpt, historicOpt,
                        speedOpt, recordOpt, archiveOpt, bufferOpt, baudOpt, stationOpt, objectOpt, sensorOpt,
-                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt, batchOpt});
+                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt, batchOpt, slinkOpt});
     parser.process(app);
 
     Config cfg;
@@ -368,6 +420,11 @@ int main(int argc, char* argv[]) {
     cfg.cornerPeriod= parser.value(cornerOpt).toDouble();
     cfg.recordSamples = std::max(8, parser.value(recSampOpt).toInt());
     cfg.batch         = std::max(1, parser.value(batchOpt).toInt());
+    if (const QString sl = parser.value(slinkOpt); !sl.isEmpty()) {
+        const int colon = sl.lastIndexOf(':');
+        cfg.slinkHost = colon > 0 ? sl.left(colon) : sl;
+        cfg.slinkPort = quint16(colon > 0 ? sl.mid(colon + 1).toUInt() : 18001);
+    }
     cfg.simRate    = std::max(1u, parser.value(rateOpt).toUInt());
     cfg.useSim     = parser.isSet(simOpt);
     cfg.simEvents  = parser.isSet(simEventsOpt);

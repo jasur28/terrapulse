@@ -31,9 +31,9 @@ using tp::slink::SeedLinkRing;
 class SlinkServerApp : public tp::client::Application {
 public:
     SlinkServerApp(tp::client::ApplicationSettings settings,
-                   quint16 port, int recordSamples, std::size_t ringPackets)
+                   quint16 port, int recordSamples, std::size_t ringPackets, quint16 feedPort)
         : Application(std::move(settings)), m_ring(ringPackets),
-          m_port(port), m_recordSamples(recordSamples) {}
+          m_port(port), m_recordSamples(recordSamples), m_feedPort(feedPort) {}
 
     bool init() override {
         if (!Application::init()) return false;
@@ -47,6 +47,20 @@ public:
         // Push freshly buffered records to connected clients a few times a second.
         QObject::connect(&m_pump, &QTimer::timeout, [this] { pumpClients(); });
         m_pump.start(100);
+
+        // Acquisition feed (Level 2, АРХИТЕКТУРА §16): acquisition pushes ready
+        // 512-byte miniSEED records straight into the ring, broker-independent —
+        // the waveform backbone is fed BEFORE the message bus, not after it.
+        if (m_feedPort) {
+            QObject::connect(&m_feedServer, &QTcpServer::newConnection, [this] { acceptFeed(); });
+            if (!m_feedServer.listen(QHostAddress::Any, m_feedPort)) {
+                std::fprintf(stderr, "[tpslinkserver] cannot listen on feed port %u: %s\n",
+                             m_feedPort, m_feedServer.errorString().toUtf8().constData());
+                return false;
+            }
+            std::printf("[tpslinkserver] acquisition feed on :%u (records -> ring, no broker)\n",
+                        m_feedPort);
+        }
 
         std::printf("[tpslinkserver] SeedLink on :%u   raw <- %s   rec=%d\n",
                     m_port, messagingUrl().toUtf8().constData(), m_recordSamples);
@@ -173,6 +187,27 @@ private:
         }
     }
 
+    // Acquisition feed: a producer streams back-to-back 512-byte miniSEED records;
+    // each complete record goes straight into the ring. No handshake — this is the
+    // trusted local acquisition path, not a client.
+    void acceptFeed() {
+        while (QTcpSocket* sock = m_feedServer.nextPendingConnection()) {
+            auto* buf = new QByteArray();
+            QObject::connect(sock, &QTcpSocket::readyRead, [this, sock, buf] {
+                buf->append(sock->readAll());
+                while (buf->size() >= tp::slink::kRecordSize) {
+                    m_ring.push(buf->constData());
+                    buf->remove(0, tp::slink::kRecordSize);
+                }
+            });
+            QObject::connect(sock, &QTcpSocket::disconnected, [sock, buf] {
+                sock->deleteLater(); delete buf;
+            });
+            std::printf("[tpslinkserver] acquisition feed connected\n");
+            std::fflush(stdout);
+        }
+    }
+
     void drop(Client* cl) {
         m_clients.removeOne(cl);
         cl->sock->deleteLater();
@@ -279,11 +314,13 @@ private:
 
     SeedLinkRing m_ring;
     QTcpServer   m_server;
+    QTcpServer   m_feedServer;      // acquisition record feed (Level 2)
     QTimer       m_pump;
     QList<Client*> m_clients;
     std::unordered_map<uint64_t, Chan> m_chans;
     quint16 m_port;
     int     m_recordSamples;
+    quint16 m_feedPort;
 };
 
 } // namespace
@@ -300,20 +337,27 @@ int main(int argc, char* argv[]) {
     QCommandLineOption portOpt  ("port",  "TCP port to serve SeedLink on", "port", "18000");
     QCommandLineOption recOpt   ("record-samples", "miniSEED samples per record before publishing", "n", "500");
     QCommandLineOption ringOpt  ("ring",  "Retention: number of recent packets kept for resume", "n", "10000");
-    parser.addOptions({masterOpt, queueOpt, portOpt, recOpt, ringOpt});
+    QCommandLineOption feedOpt  ("feed-port", "Accept a direct acquisition record feed on this port "
+                                 "(waveform backbone, no broker). 0 = disabled, use the raw. bus.", "port", "0");
+    parser.addOptions({masterOpt, queueOpt, portOpt, recOpt, ringOpt, feedOpt});
     parser.process(app);
+
+    const quint16 feedPort = quint16(parser.value(feedOpt).toUInt());
 
     tp::client::ApplicationSettings settings;
     settings.moduleName    = "tpslinkserver";
     settings.masterHost    = parser.value(masterOpt);
     settings.queue         = parser.value(queueOpt);
-    settings.subscriptions = {"raw."};
+    // With a direct acquisition feed the backbone is broker-independent; without
+    // it, fall back to consuming the raw. bus (Level 1 behaviour).
+    settings.subscriptions = feedPort ? QStringList{} : QStringList{"raw."};
     settings.sohIntervalSeconds = 2;
     settings.pollIntervalMs = 10;   // raw rate: keep latency low
 
     SlinkServerApp server(std::move(settings),
                           quint16(parser.value(portOpt).toUInt()),
                           std::max(8, parser.value(recOpt).toInt()),
-                          std::max<std::size_t>(16, parser.value(ringOpt).toULongLong()));
+                          std::max<std::size_t>(16, parser.value(ringOpt).toULongLong()),
+                          feedPort);
     return server.exec();
 }
