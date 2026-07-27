@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <string>
 #include <unordered_map>
 #include <utility>
 
@@ -32,8 +33,13 @@ public:
     WaveformClient(QString host, quint16 port);
 
     void onTriple(TripleFn fn) { m_onTriple = std::move(fn); }
+    // Map "<network>_<station>" -> objectId so FDSN-named streams resolve to a
+    // numeric object (sensor is the numeric location). Legacy numeric ids need
+    // no map. See tp::loadStationMap.
+    void setStationMap(std::unordered_map<std::string, uint32_t> m) { m_stationMap = std::move(m); }
     void start();                       // connect + handshake + auto-reconnect
-    quint64 records() const { return m_records; }
+    quint64 records()    const { return m_records; }
+    quint64 unresolved() const { return m_unresolved; }   // records dropped: id not resolvable
 
 private:
     void connectAndHandshake();
@@ -49,11 +55,13 @@ private:
     QTcpSocket m_sock;
     QByteArray m_buf;
     TripleFn   m_onTriple;
+    std::unordered_map<std::string, uint32_t> m_stationMap;
     double     m_lastRate = 200.0;
     quint32    m_lastSeq = 0;
     bool       m_haveSeq = false;
     bool       m_wired = false;
     quint64    m_records = 0;
+    quint64    m_unresolved = 0;
 };
 
 } // namespace tp::slink

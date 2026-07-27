@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <unordered_map>
 #include <cstddef>
 #include <functional>
 #include <string>
@@ -25,6 +26,17 @@ std::string sourceId(uint32_t objectId, uint32_t sensorId, int component);
 // location=sensor, orientation last). Returns false if it doesn't parse as one
 // of our numeric ids. Component: X/1->0, Y/N/2->1, Z/3->2.
 bool parseSourceId(const std::string& sid, uint32_t& object, uint32_t& sensor, int& component);
+
+// Resolve a source id to (object, sensor, component) for BOTH id styles:
+//   * legacy numeric  "FDSN:TP_1_07_H_N_Z"      -> object 1  (station is numeric)
+//   * FDSN            "FDSN:UZ_BRDG1_07_H_N_Z"  -> object from stationToObject
+// The sensor is always the (numeric) location field; only the station->object
+// step needs the map. Key format in the map is "<network>_<station>", e.g.
+// "UZ_BRDG1". Returns false only if genuinely unresolvable (bad location, or an
+// unknown non-numeric station) — the caller must NOT silently drop such records.
+bool resolveSourceId(const std::string& sid,
+                     const std::unordered_map<std::string, uint32_t>& stationToObject,
+                     uint32_t& object, uint32_t& sensor, int& component);
 
 // Each packed record is handed to the sink (bytes are only valid during the call).
 using RecordSink = std::function<void(const char* record, int length)>;

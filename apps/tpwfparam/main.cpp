@@ -10,6 +10,7 @@
 #include "analysis/StrongMotion.h"
 #include "terrapulse/client/application.h"
 #include "terrapulse/messaging/rawsamples.h"
+#include "terrapulse/messaging/inventorymap.h"
 #include "slink/WaveformClient.h"
 #include <memory>
 
@@ -39,10 +40,10 @@ class WfParamApplication : public tp::client::Application {
 public:
     WfParamApplication(tp::client::ApplicationSettings settings, double windowSec, int periodMs,
                        std::vector<double> periods, double damping,
-                       QString slinkHost = {}, quint16 slinkPort = 0)
+                       QString slinkHost = {}, quint16 slinkPort = 0, QString inventory = {})
         : Application(std::move(settings)), m_windowSec(windowSec), m_periodMs(periodMs),
           m_periods(std::move(periods)), m_damping(damping),
-          m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort) {}
+          m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort), m_inventory(std::move(inventory)) {}
 
     bool init() override {
         if (!Application::init()) return false;
@@ -52,6 +53,7 @@ public:
         // Level 2: read waveforms from the SeedLink backbone instead of the bus.
         if (m_slinkPort) {
             m_wf = std::make_unique<tp::slink::WaveformClient>(m_slinkHost, m_slinkPort);
+            if (!m_inventory.isEmpty()) m_wf->setStationMap(tp::loadStationMap(m_inventory));
             m_wf->onTriple([this](uint32_t sta, uint32_t obj, uint32_t sen,
                                   double x, double y, double z, int64_t t, double rate) {
                 feedTriple(sta, obj, sen, x, y, z, t, rate);
@@ -178,6 +180,7 @@ private:
     double  m_damping;
     QString m_slinkHost;
     quint16 m_slinkPort = 0;
+    QString m_inventory;
     std::unique_ptr<tp::slink::WaveformClient> m_wf;
 };
 
@@ -203,7 +206,8 @@ int main(int argc, char* argv[]) {
                               QString::number(cfg.integer("wfparam.periodSec", 2)));
     QCommandLineOption slinkOpt("slink", "Read waveforms from a SeedLink backbone host:port "
                                 "instead of the raw. bus (Level 2)", "host:port", "");
-    parser.addOptions({masterOpt, queueOpt, winOpt, perOpt, slinkOpt});
+    QCommandLineOption invOpt("inventory", "Inventory JSON for FDSN station->object mapping", "file", "");
+    parser.addOptions({masterOpt, queueOpt, winOpt, perOpt, slinkOpt, invOpt});
     parser.process(app);
 
     QString slinkHost; quint16 slinkPort = 0;
@@ -236,6 +240,6 @@ int main(int argc, char* argv[]) {
                           qMax(500, parser.value(perOpt).toInt() * 1000),
                           std::move(periods),
                           cfg.number("wfparam.damping", 0.05),
-                          slinkHost, slinkPort);
+                          slinkHost, slinkPort, parser.value(invOpt));
     return wf.exec();
 }

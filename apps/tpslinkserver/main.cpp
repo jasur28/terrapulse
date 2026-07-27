@@ -14,6 +14,7 @@
 #include "mseed/TdsArchive.h"
 #include "terrapulse/client/application.h"
 #include "terrapulse/messaging/rawsamples.h"
+#include "terrapulse/messaging/inventorymap.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
@@ -195,7 +196,13 @@ private:
         if (!m_archive) return;
         for (auto& d : tp::mseed::decode(rec, tp::slink::kRecordSize)) {
             uint32_t obj = 0, sen = 0; int comp = -1;
-            if (!tp::mseed::parseSourceId(d.sid, obj, sen, comp) || comp < 0) continue;
+            if (!tp::mseed::resolveSourceId(d.sid, m_stationMap, obj, sen, comp) || comp < 0) {
+                if (++m_archiveUnresolved <= 3)
+                    std::fprintf(stderr, "[tpslinkserver] archive: cannot resolve '%s' "
+                                 "(FDSN station not in inventory?) — record not archived\n",
+                                 d.sid.c_str());
+                continue;
+            }
             m_archive->setSourceId(obj, sen, comp, d.sid);   // keep the incoming id
             for (std::size_t i = 0; i < d.samples.size(); ++i)
                 m_archive->addSample(obj, sen, comp, d.samples[i],
@@ -351,6 +358,11 @@ private:
     quint16 m_feedPort;
     QString m_archiveDir;
     std::unique_ptr<tp::mseed::TdsArchive> m_archive;   // durable backbone waveform store
+    std::unordered_map<std::string, uint32_t> m_stationMap;   // FDSN "<net>_<sta>" -> object
+    quint64 m_archiveUnresolved = 0;
+
+public:
+    void setStationMap(std::unordered_map<std::string, uint32_t> m) { m_stationMap = std::move(m); }
 };
 
 } // namespace
@@ -371,7 +383,9 @@ int main(int argc, char* argv[]) {
                                  "(waveform backbone, no broker). 0 = disabled, use the raw. bus.", "port", "0");
     QCommandLineOption archOpt  ("archive", "Persist every received record to a TDS miniSEED archive "
                                  "(durable backbone waveform store)", "dir", "");
-    parser.addOptions({masterOpt, queueOpt, portOpt, recOpt, ringOpt, feedOpt, archOpt});
+    QCommandLineOption invOpt   ("inventory", "Inventory JSON for FDSN station->object mapping when "
+                                 "archiving FDSN-named streams", "file", "");
+    parser.addOptions({masterOpt, queueOpt, portOpt, recOpt, ringOpt, feedOpt, archOpt, invOpt});
     parser.process(app);
 
     const quint16 feedPort = quint16(parser.value(feedOpt).toUInt());
@@ -392,5 +406,7 @@ int main(int argc, char* argv[]) {
                           std::max<std::size_t>(16, parser.value(ringOpt).toULongLong()),
                           feedPort,
                           parser.value(archOpt));
+    if (const QString inv = parser.value(invOpt); !inv.isEmpty())
+        server.setStationMap(tp::loadStationMap(inv));
     return server.exec();
 }

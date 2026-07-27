@@ -47,6 +47,52 @@ bool parseSourceId(const std::string& sid, uint32_t& object, uint32_t& sensor, i
 }
 
 namespace {
+// Split a source id into net/sta/loc + orientation component. Returns false on
+// a shape we don't recognise or an orientation we can't map.
+bool splitSid(const std::string& sid, std::string& net, std::string& sta,
+              std::string& loc, int& component) {
+    const std::size_t colon = sid.find(':');
+    const std::string body = colon == std::string::npos ? sid : sid.substr(colon + 1);
+    std::vector<std::string> f; std::string cur;
+    for (char c : body) { if (c == '_') { f.push_back(cur); cur.clear(); } else cur.push_back(c); }
+    f.push_back(cur);
+    if (f.size() < 6) return false;                 // net sta loc band inst orient
+    const char orient = f.back().empty() ? '?' : f.back()[0];
+    switch (orient) {
+        case 'X': case 'x': case '1': component = 0; break;
+        case 'Y': case 'y': case 'N': case 'n': case '2': component = 1; break;
+        case 'Z': case 'z': case '3': component = 2; break;
+        default: return false;
+    }
+    net = f[0]; sta = f[1]; loc = f[2];
+    return true;
+}
+} // namespace
+
+bool resolveSourceId(const std::string& sid,
+                     const std::unordered_map<std::string, uint32_t>& stationToObject,
+                     uint32_t& object, uint32_t& sensor, int& component) {
+    std::string net, sta, loc;
+    if (!splitSid(sid, net, sta, loc, component)) return false;
+
+    // Sensor is always the numeric location field (both id styles).
+    char* eloc = nullptr;
+    const unsigned long sen = std::strtoul(loc.c_str(), &eloc, 10);
+    if (loc.empty() || *eloc != '\0') return false;
+    sensor = uint32_t(sen);
+
+    // Object: a numeric station is the legacy id; otherwise look it up.
+    char* esta = nullptr;
+    const unsigned long objn = std::strtoul(sta.c_str(), &esta, 10);
+    if (!sta.empty() && *esta == '\0') { object = uint32_t(objn); return true; }
+
+    const auto it = stationToObject.find(net + "_" + sta);
+    if (it == stationToObject.end()) return false;   // unknown FDSN station — caller reports
+    object = it->second;
+    return true;
+}
+
+namespace {
 struct SinkCtx { const RecordSink* sink; };
 void recordHandler(char* record, int length, void* handlerdata) {
     auto* c = static_cast<SinkCtx*>(handlerdata);

@@ -70,7 +70,13 @@ void WaveformClient::onReadyRead() {
             ++m_records;
             if (d.sampleRate > 0) m_lastRate = d.sampleRate;
             uint32_t obj = 0, sen = 0; int comp = -1;
-            if (!tp::mseed::parseSourceId(d.sid, obj, sen, comp) || comp < 0) continue;
+            if (!tp::mseed::resolveSourceId(d.sid, m_stationMap, obj, sen, comp) || comp < 0) {
+                if (++m_unresolved <= 3)     // don't spam: warn on the first few only
+                    std::fprintf(stderr, "[waveform] cannot resolve source id '%s' "
+                                 "(FDSN station not in inventory map?) — record dropped\n",
+                                 d.sid.c_str());
+                continue;
+            }
             auto& ax = m_axes[(uint64_t(obj) << 32) | sen];
             for (std::size_t i = 0; i < d.samples.size(); ++i)
                 ax.q[comp].emplace_back(d.startTimeMs + int64_t(i * 1000.0 / d.sampleRate),
