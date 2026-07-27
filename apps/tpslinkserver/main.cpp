@@ -11,6 +11,7 @@
 
 #include "slink/SeedLinkRing.h"
 #include "mseed/Mseed.h"
+#include "mseed/TdsArchive.h"
 #include "terrapulse/client/application.h"
 #include "terrapulse/messaging/rawsamples.h"
 
@@ -21,6 +22,7 @@
 #include <QTimer>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -31,12 +33,21 @@ using tp::slink::SeedLinkRing;
 class SlinkServerApp : public tp::client::Application {
 public:
     SlinkServerApp(tp::client::ApplicationSettings settings,
-                   quint16 port, int recordSamples, std::size_t ringPackets, quint16 feedPort)
+                   quint16 port, int recordSamples, std::size_t ringPackets, quint16 feedPort,
+                   QString archiveDir)
         : Application(std::move(settings)), m_ring(ringPackets),
-          m_port(port), m_recordSamples(recordSamples), m_feedPort(feedPort) {}
+          m_port(port), m_recordSamples(recordSamples), m_feedPort(feedPort),
+          m_archiveDir(std::move(archiveDir)) {}
 
     bool init() override {
         if (!Application::init()) return false;
+
+        if (!m_archiveDir.isEmpty()) {
+            m_archive = std::make_unique<tp::mseed::TdsArchive>(
+                m_archiveDir.toStdString(), m_recordSamples);
+            std::printf("[tpslinkserver] archiving backbone -> %s\n",
+                        m_archiveDir.toUtf8().constData());
+        }
 
         QObject::connect(&m_server, &QTcpServer::newConnection, [this] { accept(); });
         if (!m_server.listen(QHostAddress::Any, m_port)) {
@@ -171,9 +182,26 @@ private:
         if (c.buf.empty()) return;
         tp::mseed::encode(c.sid, c.rate, c.startMs, c.buf,
                           [this](const char* rec, int len) {
-                              if (len == tp::slink::kRecordSize) m_ring.push(rec);
+                              if (len == tp::slink::kRecordSize) ingest(rec);
                           });
         c.buf.clear();
+    }
+
+    // Every record entering the backbone: into the ring (live/resume) and, if
+    // configured, into the durable TDS archive so the backbone keeps its own
+    // waveform history (survives a server restart; readable via tpws/RecordStream).
+    void ingest(const char* rec) {
+        m_ring.push(rec);
+        if (!m_archive) return;
+        for (auto& d : tp::mseed::decode(rec, tp::slink::kRecordSize)) {
+            uint32_t obj = 0, sen = 0; int comp = -1;
+            if (!tp::mseed::parseSourceId(d.sid, obj, sen, comp) || comp < 0) continue;
+            m_archive->setSourceId(obj, sen, comp, d.sid);   // keep the incoming id
+            for (std::size_t i = 0; i < d.samples.size(); ++i)
+                m_archive->addSample(obj, sen, comp, d.samples[i],
+                                     d.startTimeMs + int64_t(i * 1000.0 / d.sampleRate),
+                                     d.sampleRate);
+        }
     }
 
     void accept() {
@@ -196,7 +224,7 @@ private:
             QObject::connect(sock, &QTcpSocket::readyRead, [this, sock, buf] {
                 buf->append(sock->readAll());
                 while (buf->size() >= tp::slink::kRecordSize) {
-                    m_ring.push(buf->constData());
+                    ingest(buf->constData());
                     buf->remove(0, tp::slink::kRecordSize);
                 }
             });
@@ -321,6 +349,8 @@ private:
     quint16 m_port;
     int     m_recordSamples;
     quint16 m_feedPort;
+    QString m_archiveDir;
+    std::unique_ptr<tp::mseed::TdsArchive> m_archive;   // durable backbone waveform store
 };
 
 } // namespace
@@ -339,7 +369,9 @@ int main(int argc, char* argv[]) {
     QCommandLineOption ringOpt  ("ring",  "Retention: number of recent packets kept for resume", "n", "10000");
     QCommandLineOption feedOpt  ("feed-port", "Accept a direct acquisition record feed on this port "
                                  "(waveform backbone, no broker). 0 = disabled, use the raw. bus.", "port", "0");
-    parser.addOptions({masterOpt, queueOpt, portOpt, recOpt, ringOpt, feedOpt});
+    QCommandLineOption archOpt  ("archive", "Persist every received record to a TDS miniSEED archive "
+                                 "(durable backbone waveform store)", "dir", "");
+    parser.addOptions({masterOpt, queueOpt, portOpt, recOpt, ringOpt, feedOpt, archOpt});
     parser.process(app);
 
     const quint16 feedPort = quint16(parser.value(feedOpt).toUInt());
@@ -358,6 +390,7 @@ int main(int argc, char* argv[]) {
                           quint16(parser.value(portOpt).toUInt()),
                           std::max(8, parser.value(recOpt).toInt()),
                           std::max<std::size_t>(16, parser.value(ringOpt).toULongLong()),
-                          feedPort);
+                          feedPort,
+                          parser.value(archOpt));
     return server.exec();
 }
