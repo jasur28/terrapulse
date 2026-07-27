@@ -17,6 +17,7 @@ param(
     [ValidateSet('start','stop','status','restart','update-config','check')]
     [string]$Command = 'start',
     [string]$Port = '',           # e.g. COM6 for the real device; empty => --sim
+    [string]$Port2 = '',          # second device (e.g. SM-3) on another COM port
     [int]$Rate = 200,
     [string]$Db = 'terrapulse.db',
     [ValidateSet('full','dashboard','tprttv','tpmap','tpolv')]
@@ -130,8 +131,12 @@ switch ($Command) {
 
         # tpacq: archive raw waveforms to TDS (feeds console review + replay) and
         # buffer 60 s of samples to survive a broker restart (store-and-forward).
-        if ($Port) { Start-Module 'tpacq' @('--port', $Port, '--archive', $Tds) }
+        if ($Port) { Start-Module 'tpacq' @('--port', $Port, '--object', '1', '--station', '1', '--sensor', '1', '--archive', $Tds) }
         else       { Start-Module 'tpacq' @('--sim', '--rate', "$Rate", '--archive', $Tds); Write-Host "  (synthetic source; use -Port COM6 for the device)" -ForegroundColor DarkGray }
+
+        # Second device (SM-3) = object 2, sensor 2 — matches the SM-3 entry in
+        # config/inventory.example.json (Tower-A, basement, seismometer).
+        if ($Port2) { Start-Module 'tpacq' @('--port', $Port2, '--object', '2', '--station', '2', '--sensor', '2', '--archive', $Tds) }
 
         if (-not $NoGui) { Start-Module 'appTerraPulse' @('--view', $View) -Gui }
 
