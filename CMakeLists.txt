@@ -105,6 +105,13 @@ add_executable(test_seedlinkring tests/test_seedlinkring.cpp)
 target_link_libraries(test_seedlinkring PRIVATE tpslinkcore)
 add_test(NAME seedlinkring COMMAND test_seedlinkring)
 
+# Processing filter chain: streaming Butterworth biquads (Поток 2). Qt-free.
+add_library(tpfilter STATIC src/proc/Filter.cpp)
+target_include_directories(tpfilter PUBLIC src)
+add_executable(test_filter tests/test_filter.cpp)
+target_link_libraries(test_filter PRIVATE tpfilter)
+add_test(NAME filter COMMAND test_filter)
+
 # ── tpdump — inspect archived waveforms via a RecordStream URI ─────────────────
 add_executable(tpdump tools/tpdump.cpp)
 target_include_directories(tpdump PRIVATE src)
@@ -185,7 +192,7 @@ add_executable(tpproc
     src/proc/ProcPipeline.cpp
 )
 target_include_directories(tpproc PRIVATE src)
-target_link_libraries(tpproc PRIVATE tp_backend tpclient tpbus tpslinkcore Qt6::Core Qt6::Network tpcfg)
+target_link_libraries(tpproc PRIVATE tp_backend tpclient tpbus tpslinkcore tpfilter Qt6::Core Qt6::Network tpcfg)
 
 # ── tpevent — group anomalies (shf) into structure-level events (evt) ─────────
 add_executable(tpevent apps/tpevent/main.cpp)

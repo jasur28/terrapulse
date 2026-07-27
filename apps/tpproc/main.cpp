@@ -4,11 +4,13 @@
 // analysis that used to live inside the Qt app.
 
 #include "proc/ProcPipeline.h"
+#include "proc/Filter.h"
 #include "terrapulse/client/application.h"
 #include "terrapulse/messaging/rawsamples.h"
 #include "terrapulse/messaging/inventorymap.h"
 #include "slink/WaveformClient.h"
 #include <memory>
+#include <unordered_map>
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
@@ -36,10 +38,11 @@ public:
     ProcApplication(tp::client::ApplicationSettings settings,
                     const tp::AnalysisThresholds& thresholds, tp::Config cfg,
                     int window, int freqWindow, QString slinkHost = {}, quint16 slinkPort = 0,
-                    QString inventory = {})
+                    QString inventory = {}, QString filterSpec = {})
         : Application(std::move(settings)), m_thresholds(thresholds),
           m_cfg(std::move(cfg)), m_window(window), m_freqWindow(freqWindow),
-          m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort), m_inventory(std::move(inventory)) {}
+          m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort), m_inventory(std::move(inventory)),
+          m_filterSpec(std::move(filterSpec)) {}
 
     bool init() override {
         if (!Application::init()) return false;
@@ -101,6 +104,17 @@ public:
     // profile on first sight.
     void feedTriple(quint32 sta, quint32 obj, quint32 sen,
                     double x, double y, double z, qint64 t, quint32 rate) {
+        // Optional filter chain (--filter "hp:0.3,lp:20"): condition the signal
+        // before analysis. Per-channel state per sensor, built at the first rate.
+        if (!m_filterSpec.isEmpty() && rate > 0) {
+            Filt& f = m_filters[(quint64(obj) << 32) | sen];
+            if (!f.built) {
+                for (int i = 0; i < 3; ++i)
+                    f.c[i] = tp::proc::FilterChain::fromSpec(m_filterSpec.toStdString(), rate);
+                f.built = true;
+            }
+            x = f.c[0].process(x); y = f.c[1].process(y); z = f.c[2].process(z);
+        }
         applyBinding(obj, sen);
         m_pipe.addSample(sta, obj, sen, x, y, z, t, rate);
         ++m_rawIn;
@@ -166,6 +180,10 @@ private:
     quint16 m_slinkPort = 0;
     QString m_inventory;
     std::unique_ptr<tp::slink::WaveformClient> m_wf;
+
+    QString m_filterSpec;                       // --filter "hp:0.3,lp:20"
+    struct Filt { tp::proc::FilterChain c[3]; bool built = false; };
+    std::unordered_map<quint64, Filt> m_filters;   // per (object<<32|sensor)
 };
 
 } // namespace
@@ -194,7 +212,10 @@ int main(int argc, char* argv[]) {
     QCommandLineOption slinkOpt("slink", "Read waveforms from a SeedLink backbone host:port "
                                 "instead of the raw. bus (Level 2)", "host:port", "");
     QCommandLineOption invOpt("inventory", "Inventory JSON for FDSN station->object mapping", "file", "");
-    parser.addOptions({masterOpt, queueOpt, winOpt, freqWinOpt, slinkOpt, invOpt});
+    QCommandLineOption filterOpt("filter", "Filter chain applied before analysis, e.g. "
+                                 "\"hp:0.3,lp:20\" (high-pass 0.3 Hz, low-pass 20 Hz). Empty = none.",
+                                 "spec", cfg.str("proc.filter", ""));
+    parser.addOptions({masterOpt, queueOpt, winOpt, freqWinOpt, slinkOpt, invOpt, filterOpt});
     parser.process(app);
 
     QString slinkHost; quint16 slinkPort = 0;
@@ -232,6 +253,6 @@ int main(int argc, char* argv[]) {
     ProcApplication proc(std::move(settings), th, cfg,
                          parser.value(winOpt).toInt(),
                          parser.value(freqWinOpt).toInt(),
-                         slinkHost, slinkPort, parser.value(invOpt));
+                         slinkHost, slinkPort, parser.value(invOpt), parser.value(filterOpt));
     return proc.exec();
 }
