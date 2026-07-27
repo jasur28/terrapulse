@@ -11,6 +11,7 @@
 
 #include "terrapulse/client/application.h"
 #include "terrapulse/messaging/rawsamples.h"
+#include "slink/WaveformClient.h"
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
@@ -20,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <string>
 
 namespace {
@@ -41,18 +43,30 @@ struct Qc {
 
 class QcApplication : public tp::client::Application {
 public:
-    QcApplication(tp::client::ApplicationSettings settings, int periodMs, double spikeSigma)
-        : Application(std::move(settings)), m_periodMs(periodMs), m_spikeSigma(spikeSigma) {}
+    QcApplication(tp::client::ApplicationSettings settings, int periodMs, double spikeSigma,
+                  QString slinkHost = {}, quint16 slinkPort = 0)
+        : Application(std::move(settings)), m_periodMs(periodMs), m_spikeSigma(spikeSigma),
+          m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort) {}
 
     bool init() override {
         if (!Application::init()) return false;
-        // Reporting cadence is this module's own concern; the base class only
-        // owns the message pump and the heartbeat.
         QObject::connect(&m_reportTimer, &QTimer::timeout, [this]() { report(); });
         m_reportTimer.start(m_periodMs);
 
-        std::printf("[tpqc] raw <- %s   qc -> broker   period=%ds\n",
-                    messagingUrl().toUtf8().constData(), m_periodMs / 1000);
+        // Level 2: read waveforms from the SeedLink backbone instead of the bus.
+        if (m_slinkPort) {
+            m_wf = std::make_unique<tp::slink::WaveformClient>(m_slinkHost, m_slinkPort);
+            m_wf->onTriple([this](uint32_t sta, uint32_t obj, uint32_t sen,
+                                  double x, double y, double z, int64_t t, double rate) {
+                feedTriple(sta, obj, sen, x, y, z, t, rate);
+            });
+            m_wf->start();
+        }
+
+        std::printf("[tpqc] waveforms <- %s   qc -> broker   period=%ds\n",
+                    m_slinkPort ? (m_slinkHost + ":" + QString::number(m_slinkPort)).toUtf8().constData()
+                                : messagingUrl().toUtf8().constData(),
+                    m_periodMs / 1000);
         std::fflush(stdout);
         return true;
     }
@@ -76,33 +90,44 @@ protected:
         q.station = h.value("station").toUInt();
         const double rate = h.value("sampleRate").toDouble();
         if (rate > 0) q.rate = rate;
-
         tp::messaging::forEachSample(h, [&](double x, double y, double z, qint64 t, int) {
-            // Gap: a jump larger than 1.5 sample periods (allows normal jitter).
-            if (q.lastT > 0 && q.rate > 0) {
-                const double dt = 1000.0 / q.rate;
-                if (double(t - q.lastT) > dt * 1.5) ++q.gaps;
-            }
-            q.lastT = t;
-            ++q.samples;
-
-            // Latency: how far behind real time the data arrives.
-            const double lat = double(now - t);
-            q.latencySum += lat; ++q.latencyN;
-            q.maxLatency = std::max(q.maxLatency, lat);
-
-            // Spike: vector magnitude far outside the running distribution
-            // (Welford running mean/variance).
-            const double mag = std::sqrt(x*x + y*y + z*z);
-            ++q.n;
-            const double d = mag - q.mean;
-            q.mean += d / double(q.n);
-            q.m2   += d * (mag - q.mean);
-            if (q.n > 50) {
-                const double sigma = std::sqrt(q.m2 / double(q.n - 1));
-                if (sigma > 1e-9 && std::fabs(mag - q.mean) > m_spikeSigma * sigma) ++q.spikes;
-            }
+            updateQc(q, x, y, z, t, now);
         });
+    }
+
+    // One quality update per sample — shared by the bus path and the SeedLink
+    // WaveformClient path (Level 2), so the metrics are identical either way.
+    void updateQc(Qc& q, double x, double y, double z, qint64 t, qint64 now) {
+        // Gap: a jump larger than 1.5 sample periods (allows normal jitter).
+        if (q.lastT > 0 && q.rate > 0) {
+            const double dt = 1000.0 / q.rate;
+            if (double(t - q.lastT) > dt * 1.5) ++q.gaps;
+        }
+        q.lastT = t;
+        ++q.samples;
+
+        const double lat = double(now - t);
+        q.latencySum += lat; ++q.latencyN;
+        q.maxLatency = std::max(q.maxLatency, lat);
+
+        const double mag = std::sqrt(x*x + y*y + z*z);
+        ++q.n;
+        const double d = mag - q.mean;
+        q.mean += d / double(q.n);
+        q.m2   += d * (mag - q.mean);
+        if (q.n > 50) {
+            const double sigma = std::sqrt(q.m2 / double(q.n - 1));
+            if (sigma > 1e-9 && std::fabs(mag - q.mean) > m_spikeSigma * sigma) ++q.spikes;
+        }
+    }
+
+    // SeedLink path: one triaxial sample straight from the waveform backbone.
+    void feedTriple(quint32 station, quint32 obj, quint32 sen,
+                    double x, double y, double z, qint64 t, double rate) {
+        Qc& q = m_stats[(quint64(obj) << 20) | sen];
+        q.station = station;
+        if (rate > 0) q.rate = rate;
+        updateQc(q, x, y, z, t, QDateTime::currentMSecsSinceEpoch());
     }
 
 private:
@@ -157,6 +182,9 @@ private:
     QTimer  m_reportTimer;
     int     m_periodMs;
     double  m_spikeSigma;
+    QString m_slinkHost;
+    quint16 m_slinkPort = 0;
+    std::unique_ptr<tp::slink::WaveformClient> m_wf;
 };
 
 } // namespace
@@ -178,18 +206,28 @@ int main(int argc, char* argv[]) {
                                 cfg.str("connection.queue", "production"));
     QCommandLineOption perOpt("period-sec", "Reporting period (s)", "s",
                               QString::number(cfg.integer("qc.periodSec", 5)));
-    parser.addOptions({masterOpt, queueOpt, perOpt});
+    QCommandLineOption slinkOpt("slink", "Read waveforms from a SeedLink backbone host:port "
+                                "instead of the raw. bus (Level 2)", "host:port", "");
+    parser.addOptions({masterOpt, queueOpt, perOpt, slinkOpt});
     parser.process(app);
+
+    QString slinkHost; quint16 slinkPort = 0;
+    if (const QString sl = parser.value(slinkOpt); !sl.isEmpty()) {
+        const int colon = sl.lastIndexOf(':');
+        slinkHost = colon > 0 ? sl.left(colon) : sl;
+        slinkPort = quint16(colon > 0 ? sl.mid(colon + 1).toUInt() : 18000);
+    }
 
     tp::client::ApplicationSettings settings;
     settings.moduleName = "tpqc";
     settings.masterHost = parser.value(masterOpt);
     settings.queue      = parser.value(queueOpt);
-    settings.subscriptions = {"raw."};
+    settings.subscriptions = slinkPort ? QStringList{} : QStringList{"raw."};  // backbone vs bus
     settings.sohIntervalSeconds = 2;
 
     QcApplication qc(std::move(settings),
                      std::max(1000, parser.value(perOpt).toInt() * 1000),
-                     cfg.number("qc.spikeSigma", 8.0));
+                     cfg.number("qc.spikeSigma", 8.0),
+                     slinkHost, slinkPort);
     return qc.exec();
 }

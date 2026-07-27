@@ -96,9 +96,11 @@ add_executable(test_tdsarchive tests/test_tdsarchive.cpp)
 target_link_libraries(test_tdsarchive PRIVATE tpmseed)
 add_test(NAME tdsarchive COMMAND test_tdsarchive)
 
-# SeedLink server core: retention ring + packet framing (Stage 5).
-add_library(tpslinkcore STATIC src/slink/SeedLinkRing.cpp)
+# SeedLink core: retention ring + framing (server) and the live WaveformClient
+# consumers use instead of the raw. bus (Level 2 backbone).
+add_library(tpslinkcore STATIC src/slink/SeedLinkRing.cpp src/slink/WaveformClient.cpp)
 target_include_directories(tpslinkcore PUBLIC src)
+target_link_libraries(tpslinkcore PUBLIC tpmseed Qt6::Core Qt6::Network)
 add_executable(test_seedlinkring tests/test_seedlinkring.cpp)
 target_link_libraries(test_seedlinkring PRIVATE tpslinkcore)
 add_test(NAME seedlinkring COMMAND test_seedlinkring)
@@ -183,7 +185,7 @@ add_executable(tpproc
     src/proc/ProcPipeline.cpp
 )
 target_include_directories(tpproc PRIVATE src)
-target_link_libraries(tpproc PRIVATE tp_backend tpclient tpbus Qt6::Core tpcfg)
+target_link_libraries(tpproc PRIVATE tp_backend tpclient tpbus tpslinkcore Qt6::Core Qt6::Network tpcfg)
 
 # ── tpevent — group anomalies (shf) into structure-level events (evt) ─────────
 add_executable(tpevent apps/tpevent/main.cpp)
@@ -193,12 +195,12 @@ target_link_libraries(tpevent PRIVATE tpclient tpbus Qt6::Core tpcfg)
 # ── tpwfparam — strong-motion params (PGA/PGV/response spectra/JMA) ───────────
 add_executable(tpwfparam apps/tpwfparam/main.cpp)
 target_include_directories(tpwfparam PRIVATE src)
-target_link_libraries(tpwfparam PRIVATE tp_backend tpclient tpbus Qt6::Core tpcfg)
+target_link_libraries(tpwfparam PRIVATE tp_backend tpclient tpbus tpslinkcore Qt6::Core Qt6::Network tpcfg)
 
 # ── tpqc — data-quality metrics (gaps/latency/spikes/availability) ────────────
 add_executable(tpqc apps/tpqc/main.cpp)
 target_include_directories(tpqc PRIVATE src)
-target_link_libraries(tpqc PRIVATE tpclient tpbus tpcfg Qt6::Core)
+target_link_libraries(tpqc PRIVATE tpclient tpbus tpcfg tpslinkcore Qt6::Core Qt6::Network)
 
 # ── tpalert — run an operator command on anomaly events ───────────────────────
 add_executable(tpalert apps/tpalert/main.cpp)

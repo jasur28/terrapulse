@@ -20,6 +20,12 @@ constexpr int Int32  = 3;    // DE_INT32  — uncompressed
 // orientation X/Y/Z.
 std::string sourceId(uint32_t objectId, uint32_t sensorId, int component);
 
+// Inverse of sourceId for our legacy numeric ids: parse object/sensor/component
+// back out of a source id like "FDSN:TP_1_01_H_N_Z" (station=object,
+// location=sensor, orientation last). Returns false if it doesn't parse as one
+// of our numeric ids. Component: X/1->0, Y/N/2->1, Z/3->2.
+bool parseSourceId(const std::string& sid, uint32_t& object, uint32_t& sensor, int& component);
+
 // Each packed record is handed to the sink (bytes are only valid during the call).
 using RecordSink = std::function<void(const char* record, int length)>;
 

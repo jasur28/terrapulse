@@ -55,7 +55,8 @@ struct Config {
     int     batch = 20;           // bus samples per message (1 = per-sample)
     QString slinkHost;            // --slink host:port: push miniSEED records to a
     quint16 slinkPort = 0;        // tpslinkserver feed (waveform backbone, no bus)
-};
+    bool    noBus = false;        // --no-bus: don't publish raw. to the broker at
+};                                // all (pure backbone; only when no GUI needs it)
 
 class AcqApplication : public tp::client::Application {
 public:
@@ -189,6 +190,11 @@ private:
     // Publish the accumulated samples as one batched raw message.
     void flushBatch() {
         if (m_batch.x.isEmpty()) return;
+        if (m_cfg.noBus) {                 // pure backbone: nothing on the broker
+            m_published += m_batch.x.size();
+            m_batch.x.clear(); m_batch.y.clear(); m_batch.z.clear();
+            return;
+        }
         QVariantMap h;
         h["v"]          = 1;
         h["type"]       = "raw";
@@ -405,9 +411,11 @@ int main(int argc, char* argv[]) {
     QCommandLineOption batchOpt  ("batch",       "Bus samples per message (cuts message rate; 1 = per-sample)", "n", "20");
     QCommandLineOption slinkOpt  ("slink",       "Push miniSEED records to a tpslinkserver feed host:port "
                                   "(waveform backbone, no broker)", "host:port", "");
+    QCommandLineOption noBusOpt  ("no-bus",      "With --slink: do NOT publish raw. to the broker at all "
+                                  "(pure backbone; use only when no GUI needs the bus)");
     parser.addOptions({portOpt, masterOpt, queueOpt, simOpt, simEventsOpt, rateOpt, replayOpt, historicOpt,
                        speedOpt, recordOpt, archiveOpt, bufferOpt, baudOpt, stationOpt, objectOpt, sensorOpt,
-                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt, batchOpt, slinkOpt});
+                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt, batchOpt, slinkOpt, noBusOpt});
     parser.process(app);
 
     Config cfg;
@@ -425,6 +433,7 @@ int main(int argc, char* argv[]) {
         cfg.slinkHost = colon > 0 ? sl.left(colon) : sl;
         cfg.slinkPort = quint16(colon > 0 ? sl.mid(colon + 1).toUInt() : 18001);
     }
+    cfg.noBus = parser.isSet(noBusOpt);
     cfg.simRate    = std::max(1u, parser.value(rateOpt).toUInt());
     cfg.useSim     = parser.isSet(simOpt);
     cfg.simEvents  = parser.isSet(simEventsOpt);

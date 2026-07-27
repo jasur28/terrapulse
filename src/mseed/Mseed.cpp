@@ -3,7 +3,9 @@
 #include <libmseed.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <vector>
 
 namespace tp::mseed {
 
@@ -17,6 +19,31 @@ std::string sourceId(uint32_t objectId, uint32_t sensorId, int component) {
     if (ms_nslc2sid(sid, sizeof sid, 0, "TP", sta, loc, chan) < 0)
         return std::string("FDSN:TP_") + sta + "_" + loc + "_H_N_" + pos;
     return std::string(sid);
+}
+
+bool parseSourceId(const std::string& sid, uint32_t& object, uint32_t& sensor, int& component) {
+    // Expect "FDSN:TP_<obj>_<sen>_<band>_<inst>_<orient>" (our legacy numeric id).
+    const std::size_t colon = sid.find(':');
+    const std::string body = colon == std::string::npos ? sid : sid.substr(colon + 1);
+    // Split on '_'.
+    std::vector<std::string> f; std::string cur;
+    for (char c : body) { if (c == '_') { f.push_back(cur); cur.clear(); } else cur.push_back(c); }
+    f.push_back(cur);
+    if (f.size() < 6) return false;                 // net sta loc band inst orient
+    char* e1 = nullptr; char* e2 = nullptr;
+    const unsigned long obj = std::strtoul(f[1].c_str(), &e1, 10);
+    const unsigned long sen = std::strtoul(f[2].c_str(), &e2, 10);
+    if (*e1 != '\0' || *e2 != '\0' || f[1].empty() || f[2].empty()) return false;  // not numeric
+    const char orient = f.back().empty() ? '?' : f.back()[0];
+    switch (orient) {
+        case 'X': case 'x': case '1': component = 0; break;
+        case 'Y': case 'y': case 'N': case 'n': case '2': component = 1; break;
+        case 'Z': case 'z': case '3': component = 2; break;
+        default: return false;
+    }
+    object = uint32_t(obj);
+    sensor = uint32_t(sen);
+    return true;
 }
 
 namespace {

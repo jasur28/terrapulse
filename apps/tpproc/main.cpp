@@ -6,6 +6,8 @@
 #include "proc/ProcPipeline.h"
 #include "terrapulse/client/application.h"
 #include "terrapulse/messaging/rawsamples.h"
+#include "slink/WaveformClient.h"
+#include <memory>
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
@@ -32,9 +34,10 @@ class ProcApplication : public tp::client::Application {
 public:
     ProcApplication(tp::client::ApplicationSettings settings,
                     const tp::AnalysisThresholds& thresholds, tp::Config cfg,
-                    int window, int freqWindow)
+                    int window, int freqWindow, QString slinkHost = {}, quint16 slinkPort = 0)
         : Application(std::move(settings)), m_thresholds(thresholds),
-          m_cfg(std::move(cfg)), m_window(window), m_freqWindow(freqWindow) {}
+          m_cfg(std::move(cfg)), m_window(window), m_freqWindow(freqWindow),
+          m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort) {}
 
     bool init() override {
         if (!Application::init()) return false;
@@ -62,8 +65,20 @@ public:
             ++m_shfOut;
         };
 
-        std::printf("[tpproc] raw <- %s   saf/shf -> broker   window=%d\n",
-                    messagingUrl().toUtf8().constData(), m_pipe.windowSize());
+        // Level 2: read waveforms from the SeedLink backbone instead of the bus.
+        if (m_slinkPort) {
+            m_wf = std::make_unique<tp::slink::WaveformClient>(m_slinkHost, m_slinkPort);
+            m_wf->onTriple([this](uint32_t sta, uint32_t obj, uint32_t sen,
+                                  double x, double y, double z, int64_t t, double rate) {
+                feedTriple(sta, obj, sen, x, y, z, t, quint32(rate));
+            });
+            m_wf->start();
+        }
+
+        std::printf("[tpproc] waveforms <- %s   saf/shf -> broker   window=%d\n",
+                    m_slinkPort ? (m_slinkHost + ":" + QString::number(m_slinkPort)).toUtf8().constData()
+                                : messagingUrl().toUtf8().constData(),
+                    m_pipe.windowSize());
         std::fflush(stdout);
         return true;
     }
@@ -77,14 +92,31 @@ public:
         return c;
     }
 
+    // One triaxial sample into the pipeline — shared by the bus path and the
+    // SeedLink WaveformClient path (Level 2). Resolves the sensor's binding
+    // profile on first sight.
+    void feedTriple(quint32 sta, quint32 obj, quint32 sen,
+                    double x, double y, double z, qint64 t, quint32 rate) {
+        applyBinding(obj, sen);
+        m_pipe.addSample(sta, obj, sen, x, y, z, t, rate);
+        ++m_rawIn;
+    }
+
 protected:
     void handleMessage(const QString& topic, const QVariantMap& h) override {
         if (!topic.startsWith("raw.")) return;
-
-        // First time we see a sensor, apply its binding profile (if any) so this
-        // structure is judged by its own thresholds.
         const quint32 hObj = h.value("object").toUInt();
         const quint32 hSen = h.value("sensor").toUInt();
+        const quint32 sta  = h.value("station").toUInt();
+        const quint32 rate = h.value("sampleRate").toUInt();
+        tp::messaging::forEachSample(h, [&](double x, double y, double z, qint64 t, int) {
+            feedTriple(sta, hObj, hSen, x, y, z, t, rate);
+        });
+    }
+
+    // First time we see a sensor, apply its binding profile (if any) so this
+    // structure is judged by its own thresholds.
+    void applyBinding(quint32 hObj, quint32 hSen) {
         if (!m_pipe.hasThresholdsFor(hObj, hSen) && !m_bound.contains(qMakePair(hObj, hSen))) {
             m_bound.insert(qMakePair(hObj, hSen));
             tp::Config bcfg;
@@ -104,13 +136,6 @@ protected:
                 std::fflush(stdout);
             }
         }
-
-        const quint32 sta  = h.value("station").toUInt();
-        const quint32 rate = h.value("sampleRate").toUInt();
-        tp::messaging::forEachSample(h, [&](double x, double y, double z, qint64 t, int) {
-            m_pipe.addSample(sta, hObj, hSen, x, y, z, t, rate);
-            ++m_rawIn;
-        });
     }
 
     void handleSOH() override {
@@ -133,6 +158,9 @@ private:
     QSet<QPair<quint32,quint32>> m_bound;   // sensors whose binding we resolved
     quint64 m_rawIn = 0, m_safOut = 0, m_shfOut = 0, m_trigWindows = 0;
     double  m_maxRatio = 0.0, m_lastFreqX = 0.0;
+    QString m_slinkHost;
+    quint16 m_slinkPort = 0;
+    std::unique_ptr<tp::slink::WaveformClient> m_wf;
 };
 
 } // namespace
@@ -158,8 +186,17 @@ int main(int argc, char* argv[]) {
     QCommandLineOption freqWinOpt("freq-window",
         "Samples used for the natural-frequency estimate (longer = finer resolution)", "n",
         QString::number(cfg.integer("proc.freqWindow", 1024)));
-    parser.addOptions({masterOpt, queueOpt, winOpt, freqWinOpt});
+    QCommandLineOption slinkOpt("slink", "Read waveforms from a SeedLink backbone host:port "
+                                "instead of the raw. bus (Level 2)", "host:port", "");
+    parser.addOptions({masterOpt, queueOpt, winOpt, freqWinOpt, slinkOpt});
     parser.process(app);
+
+    QString slinkHost; quint16 slinkPort = 0;
+    if (const QString sl = parser.value(slinkOpt); !sl.isEmpty()) {
+        const int colon = sl.lastIndexOf(':');
+        slinkHost = colon > 0 ? sl.left(colon) : sl;
+        slinkPort = quint16(colon > 0 ? sl.mid(colon + 1).toUInt() : 18000);
+    }
 
     // Detection thresholds and health weights — the engineer-tunable knobs.
     tp::AnalysisThresholds th;
@@ -182,12 +219,13 @@ int main(int argc, char* argv[]) {
     settings.moduleName    = "tpproc";
     settings.masterHost    = parser.value(masterOpt);
     settings.queue         = parser.value(queueOpt);
-    settings.subscriptions = {"raw."};
+    settings.subscriptions = slinkPort ? QStringList{} : QStringList{"raw."};  // backbone vs bus
     settings.sohIntervalSeconds = 2;
     settings.pollIntervalMs = 10;   // raw rate: keep latency low
 
     ProcApplication proc(std::move(settings), th, cfg,
                          parser.value(winOpt).toInt(),
-                         parser.value(freqWinOpt).toInt());
+                         parser.value(freqWinOpt).toInt(),
+                         slinkHost, slinkPort);
     return proc.exec();
 }

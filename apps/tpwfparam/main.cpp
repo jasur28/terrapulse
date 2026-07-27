@@ -10,6 +10,8 @@
 #include "analysis/StrongMotion.h"
 #include "terrapulse/client/application.h"
 #include "terrapulse/messaging/rawsamples.h"
+#include "slink/WaveformClient.h"
+#include <memory>
 
 #include <QCoreApplication>
 #include <QCommandLineParser>
@@ -36,17 +38,31 @@ struct Buf {
 class WfParamApplication : public tp::client::Application {
 public:
     WfParamApplication(tp::client::ApplicationSettings settings, double windowSec, int periodMs,
-                       std::vector<double> periods, double damping)
+                       std::vector<double> periods, double damping,
+                       QString slinkHost = {}, quint16 slinkPort = 0)
         : Application(std::move(settings)), m_windowSec(windowSec), m_periodMs(periodMs),
-          m_periods(std::move(periods)), m_damping(damping) {}
+          m_periods(std::move(periods)), m_damping(damping),
+          m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort) {}
 
     bool init() override {
         if (!Application::init()) return false;
         QObject::connect(&m_computeTimer, &QTimer::timeout, [this]() { compute(); });
         m_computeTimer.start(m_periodMs);
 
-        std::printf("[tpwfparam] raw <- %s   wfp -> broker   window=%.0fs period=%dms\n",
-                    messagingUrl().toUtf8().constData(), m_windowSec, m_periodMs);
+        // Level 2: read waveforms from the SeedLink backbone instead of the bus.
+        if (m_slinkPort) {
+            m_wf = std::make_unique<tp::slink::WaveformClient>(m_slinkHost, m_slinkPort);
+            m_wf->onTriple([this](uint32_t sta, uint32_t obj, uint32_t sen,
+                                  double x, double y, double z, int64_t t, double rate) {
+                feedTriple(sta, obj, sen, x, y, z, t, rate);
+            });
+            m_wf->start();
+        }
+
+        std::printf("[tpwfparam] waveforms <- %s   wfp -> broker   window=%.0fs period=%dms\n",
+                    m_slinkPort ? (m_slinkHost + ":" + QString::number(m_slinkPort)).toUtf8().constData()
+                                : messagingUrl().toUtf8().constData(),
+                    m_windowSec, m_periodMs);
         std::fflush(stdout);
         return true;
     }
@@ -59,21 +75,29 @@ public:
     }
 
 protected:
+    // One triaxial sample into a sensor's rolling window — shared by the bus path
+    // and the SeedLink WaveformClient path (Level 2).
+    void feedTriple(quint32 station, quint32 obj, quint32 sen,
+                    double x, double y, double z, qint64 t, double rate) {
+        Buf& b = m_bufs[(quint64(obj) << 20) | sen];
+        b.station = station;
+        if (rate > 0) b.rate = rate;
+        b.lastT = t;
+        b.x.push_back(float(x));
+        b.y.push_back(float(y));
+        b.z.push_back(float(z));
+        const std::size_t cap = std::size_t(b.rate * m_windowSec);
+        while (b.x.size() > cap) { b.x.pop_front(); b.y.pop_front(); b.z.pop_front(); }
+    }
+
     void handleMessage(const QString& topic, const QVariantMap& h) override {
         if (!topic.startsWith("raw.")) return;
         const quint32 obj = h.value("object").toUInt();
         const quint32 sen = h.value("sensor").toUInt();
-        const quint64 key = (quint64(obj) << 20) | sen;
-        Buf& b = m_bufs[key];
-        b.station = h.value("station").toUInt();
-        b.rate    = h.value("sampleRate").toDouble() > 0 ? h.value("sampleRate").toDouble() : 200.0;
-        const std::size_t cap = std::size_t(b.rate * m_windowSec);
+        const quint32 sta = h.value("station").toUInt();
+        const double rate = h.value("sampleRate").toDouble();
         tp::messaging::forEachSample(h, [&](double x, double y, double z, qint64 t, int) {
-            b.lastT = t;
-            b.x.push_back(float(x));
-            b.y.push_back(float(y));
-            b.z.push_back(float(z));
-            while (b.x.size() > cap) { b.x.pop_front(); b.y.pop_front(); b.z.pop_front(); }
+            feedTriple(sta, obj, sen, x, y, z, t, rate);
         });
     }
 
@@ -152,6 +176,9 @@ private:
     int     m_periodMs;
     std::vector<double> m_periods;
     double  m_damping;
+    QString m_slinkHost;
+    quint16 m_slinkPort = 0;
+    std::unique_ptr<tp::slink::WaveformClient> m_wf;
 };
 
 } // namespace
@@ -174,8 +201,17 @@ int main(int argc, char* argv[]) {
                               QString::number(cfg.integer("wfparam.windowSec", 10)));
     QCommandLineOption perOpt("period-sec", "Compute period (s)", "s",
                               QString::number(cfg.integer("wfparam.periodSec", 2)));
-    parser.addOptions({masterOpt, queueOpt, winOpt, perOpt});
+    QCommandLineOption slinkOpt("slink", "Read waveforms from a SeedLink backbone host:port "
+                                "instead of the raw. bus (Level 2)", "host:port", "");
+    parser.addOptions({masterOpt, queueOpt, winOpt, perOpt, slinkOpt});
     parser.process(app);
+
+    QString slinkHost; quint16 slinkPort = 0;
+    if (const QString sl = parser.value(slinkOpt); !sl.isEmpty()) {
+        const int colon = sl.lastIndexOf(':');
+        slinkHost = colon > 0 ? sl.left(colon) : sl;
+        slinkPort = quint16(colon > 0 ? sl.mid(colon + 1).toUInt() : 18000);
+    }
 
     // Response-spectrum periods and damping come from configuration so an
     // engineer can match them to the monitored structures' natural periods.
@@ -191,7 +227,7 @@ int main(int argc, char* argv[]) {
     settings.moduleName    = "tpwfparam";
     settings.masterHost    = parser.value(masterOpt);
     settings.queue         = parser.value(queueOpt);
-    settings.subscriptions = {"raw."};
+    settings.subscriptions = slinkPort ? QStringList{} : QStringList{"raw."};  // backbone vs bus
     settings.sohIntervalSeconds = 2;
     settings.pollIntervalMs = 20;   // raw rate: keep latency low
 
@@ -199,6 +235,7 @@ int main(int argc, char* argv[]) {
                           qMax(2, parser.value(winOpt).toInt()),
                           qMax(500, parser.value(perOpt).toInt() * 1000),
                           std::move(periods),
-                          cfg.number("wfparam.damping", 0.05));
+                          cfg.number("wfparam.damping", 0.05),
+                          slinkHost, slinkPort);
     return wf.exec();
 }
