@@ -24,6 +24,7 @@
 #include <QTextStream>
 #include <QTimer>
 #include <QVariantList>
+#include <deque>
 #include <unordered_map>
 #include <algorithm>
 #include <cmath>
@@ -82,11 +83,26 @@ public:
             if (!bindArchiveIdentity()) return false;   // refuse rather than archive nothing
         }
         if (m_cfg.slinkPort) {
+            // Resolve the feed's channel identity the SAME way the archive does:
+            // FDSN StreamId when a station code is configured, else legacy numeric.
+            if (!m_cfg.stationCode.isEmpty()) {
+                const auto kind = m_cfg.kind == "seismometer"
+                                      ? tp::mseed::Instrument::Seismometer
+                                      : tp::mseed::Instrument::Accelerometer;
+                for (int comp = 0; comp < 3; ++comp) {
+                    const auto r = tp::mseed::makeStreamId(
+                        m_cfg.network.toStdString(), m_cfg.stationCode.toStdString(),
+                        m_cfg.sensor, kind, m_cfg.simRate, m_cfg.cornerPeriod, comp);
+                    if (r.ok) m_feedSid[comp] = r.id.sourceId();
+                }
+            }
             connectFeed();
+            QObject::connect(&m_feedSock, &QTcpSocket::connected,    [this]() { drainFeed(); });
             QObject::connect(&m_feedSock, &QTcpSocket::disconnected, [this]() {
+                ++m_reconnects;
                 QTimer::singleShot(2000, [this]() { connectFeed(); });   // reconnect
             });
-            std::printf("[tpacq] waveform feed -> %s:%u (records, no bus)\n",
+            std::printf("[tpacq] waveform feed -> %s:%u (records, no bus, backlog no-loss)\n",
                         m_cfg.slinkHost.toUtf8().constData(), m_cfg.slinkPort);
         }
 
@@ -112,9 +128,15 @@ public:
         QVariantMap c;
         c["published"] = static_cast<qulonglong>(m_published);
         c["packets"]   = static_cast<qulonglong>(m_serial.packetCount());
-        c["bad"]       = static_cast<qulonglong>(m_serial.badPacketCount());
+        c["bad"]       = static_cast<qulonglong>(m_serial.badPacketCount());   // crcBad
+        c["seqLost"]   = static_cast<qulonglong>(m_seqLost);
         c["src"]       = srcLabel();
         c["queue"]     = settings().queue;
+        if (m_cfg.slinkPort) {
+            c["feedBacklog"] = static_cast<qulonglong>(m_feedBacklog.size());
+            c["feedDropped"] = static_cast<qulonglong>(m_feedDropped);
+            c["reconnects"]  = static_cast<qulonglong>(m_reconnects);
+        }
         return c;
     }
 
@@ -165,6 +187,11 @@ private:
 
     // Single publish path shared by every source.
     void publishSample(qint64 t, double x, double y, double z, quint64 seq, quint32 rate) {
+        // Sequence-gap counter at the acquisition edge: a jump in the device's
+        // own sample number means the link (not the analysis) lost samples.
+        if (m_haveDevSeq && seq > m_lastDevSeq + 1) m_seqLost += seq - m_lastDevSeq - 1;
+        m_lastDevSeq = seq; m_haveDevSeq = true;
+
         if (m_recOut.device())
             m_recOut << t << ',' << x << ',' << y << ',' << z << '\n';
         if (m_tds) {                       // gal -> integer counts (x10000), 3 axes
@@ -215,7 +242,12 @@ private:
     // Waveform backbone feed (--slink): per-component record accumulation + socket.
     struct FeedChan { std::string sid; double rate = 0.0; int64_t startMs = 0; std::vector<int32_t> buf; };
     std::unordered_map<int, FeedChan> m_feed;
-    QTcpSocket m_feedSock;
+    std::string m_feedSid[3];               // resolved FDSN id per component (empty = legacy)
+    QTcpSocket  m_feedSock;
+    std::deque<QByteArray> m_feedBacklog;   // records waiting to go out (no-loss on reconnect)
+    static constexpr std::size_t kFeedBacklogMax = 20000;   // ~ generous outage window
+    quint64 m_feedDropped = 0, m_reconnects = 0, m_seqLost = 0;
+    quint64 m_lastDevSeq = 0; bool m_haveDevSeq = false;
 
     void connectFeed() {
         m_feedSock.abort();
@@ -227,20 +259,41 @@ private:
     void feedRecord(int comp, int32_t v, int64_t t, double rate) {
         FeedChan& c = m_feed[comp];
         if (c.buf.empty()) {
-            c.sid = tp::mseed::sourceId(m_cfg.object, m_cfg.sensor, comp);
+            c.sid = m_feedSid[comp].empty()
+                        ? tp::mseed::sourceId(m_cfg.object, m_cfg.sensor, comp)
+                        : m_feedSid[comp];               // FDSN id when resolved (see init)
             c.rate = rate; c.startMs = t;
         }
         c.buf.push_back(v);
         if (int(c.buf.size()) >= m_cfg.recordSamples) flushFeedChan(c);
     }
 
+    // Encode a full window into records and QUEUE them in the backlog. Records
+    // are never dropped on a disconnect — they wait in a bounded backlog and go
+    // out on reconnect (no-loss within the backlog window).
     void flushFeedChan(FeedChan& c) {
-        if (c.buf.empty() || m_feedSock.state() != QAbstractSocket::ConnectedState) { c.buf.clear(); return; }
+        if (c.buf.empty()) return;
         tp::mseed::encode(c.sid, c.rate, c.startMs, c.buf,
                           [this](const char* rec, int len) {
-                              if (len == 512) m_feedSock.write(rec, 512);
+                              if (len != 512) return;
+                              m_feedBacklog.emplace_back(rec, 512);
+                              while (m_feedBacklog.size() > kFeedBacklogMax) {
+                                  m_feedBacklog.pop_front();   // outage longer than the backlog
+                                  ++m_feedDropped;
+                              }
                           });
         c.buf.clear();
+        drainFeed();
+    }
+
+    // Send as much of the backlog as the socket will take, oldest first.
+    void drainFeed() {
+        if (m_feedSock.state() != QAbstractSocket::ConnectedState) return;
+        while (!m_feedBacklog.empty()) {
+            const QByteArray& rec = m_feedBacklog.front();
+            if (m_feedSock.write(rec) != rec.size()) break;   // socket buffer full: try later
+            m_feedBacklog.pop_front();
+        }
     }
 
     // ── Synthetic source (--sim) ─────────────────────────────────────────────
@@ -310,8 +363,15 @@ private:
 
     void printStats() {
         flushBatch();                       // don't let a partial batch linger
+        drainFeed();                        // and keep the feed backlog moving
         if (m_recOut.device()) m_recOut.flush();
         if (m_tds) m_tds->flushAll();
+        if (m_cfg.slinkPort)
+            std::printf("[tpacq] feed backlog=%zu dropped=%llu reconnects=%llu seqLost=%llu\n",
+                        m_feedBacklog.size(),
+                        static_cast<unsigned long long>(m_feedDropped),
+                        static_cast<unsigned long long>(m_reconnects),
+                        static_cast<unsigned long long>(m_seqLost));
         if (m_cfg.useSim || m_cfg.useReplay) {
             if (settings().storeForwardCap > 0 && publisher())
                 std::printf("[tpacq] %s published=%llu  queue=%s  link=%s backlog=%zu\n",
