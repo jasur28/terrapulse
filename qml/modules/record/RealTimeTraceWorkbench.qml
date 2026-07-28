@@ -34,8 +34,23 @@ Item {
     }
 
     function streamRows() {
-        var sensors = inventory.sensors || []
         var rows = []
+        // Prefer the streams actually arriving over the SeedLink backbone (the
+        // RecordStream model): the view reflects live records, not static inventory.
+        var live = liveWaveform.streams || []
+        if (live.length > 0) {
+            for (var k = 0; k < live.length && rows.length < root.maxRows; k++) {
+                var ls = live[k]
+                var lsta = String(ls.station !== undefined ? ls.station : ls.object)
+                var lsen = String(ls.sensor !== undefined ? ls.sensor : 1)
+                var lnet = ls.network !== undefined ? String(ls.network) : "TP"
+                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HHE", component: "x", enabled: true, color: root.traceGray })
+                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HHN", component: "y", enabled: true, color: root.traceGreen })
+                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HHZ", component: "z", enabled: true, color: root.traceBlue })
+            }
+            return rows.filter(function(r) { return root.activeTab === 0 ? r.enabled : !r.enabled })
+        }
+        var sensors = inventory.sensors || []
         for (var i = 0; i < sensors.length && rows.length < root.maxRows; i++) {
             var s = sensors[i]
             var sta = String(s.objectId !== undefined ? s.objectId : "OBJ")
@@ -94,10 +109,10 @@ Item {
     }
 
     Connections {
-        target: acq
+        target: liveWaveform
 
-        function onConnectedChanged() {
-            if (!acq.connected) {
+        function onStateChanged() {
+            if (!liveWaveform.connected) {
                 root.liveSeries = ({})
                 root.picks = []
                 root.baseTime = -1
@@ -111,8 +126,8 @@ Item {
             if (root.baseTime < 0) root.baseTime = t
             root.latestRelT = t - root.baseTime
 
-            var sta = String(sample.object !== undefined ? sample.object : acq.object)
-            var sen = String(sample.sensor !== undefined ? sample.sensor : acq.sensor)
+            var sta = String(sample.object !== undefined ? sample.object : sample.station)
+            var sen = String(sample.sensor !== undefined ? sample.sensor : 1)
             appendPoint(sta + "." + sen + ".HHE", root.latestRelT, sample.x || 0)
             appendPoint(sta + "." + sen + ".HHN", root.latestRelT, sample.y || 0)
             appendPoint(sta + "." + sen + ".HHZ", root.latestRelT, sample.z || 0)
@@ -169,8 +184,9 @@ Item {
                 Item { Layout.fillWidth: true }
 
                 Text {
-                    text: acq.connected ? "LIVE  " + acq.endpoint : "No connection to tpmaster"
-                    color: acq.connected ? "#126b22" : "#777777"
+                    text: liveWaveform.connected ? "LIVE  " + liveWaveform.endpoint
+                          : (liveWaveform.endpoint !== "" ? "Waiting for records  " + liveWaveform.endpoint : "No SeedLink backbone")
+                    color: liveWaveform.connected ? "#126b22" : "#777777"
                     font.pixelSize: 12
                 }
             }
@@ -501,8 +517,8 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: acq.connected
-                          ? "Receiving records from " + acq.endpoint + "    " + acq.packetCount + " samples"
+                    text: liveWaveform.connected
+                          ? "Receiving records from " + liveWaveform.endpoint + "    " + liveWaveform.records + " samples"
                           : "Loading records"
                     color: "#202020"
                     font.pixelSize: 12

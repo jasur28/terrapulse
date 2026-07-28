@@ -7,10 +7,11 @@ TpGuiApplication {
 
     moduleName: "tprttv"
     menus: ["File", "Interaction", "Help"]
-    connectionText: acq.endpoint
+    connectionText: liveWaveform.endpoint !== "" ? liveWaveform.endpoint : "no SeedLink backbone"
     statusLeft: trace.filterEnabled ? "Filter ON : BW(0.5, 8.0)" : "Filter OFF"
-    statusCenter: acq.connected ? "Receiving records" : "Loading records"
-    statusRight: acq.packetCount + " samples  " + acq.sampleRate.toFixed(0) + " Hz"
+    statusCenter: liveWaveform.connected ? "Receiving records" : "Loading records"
+    statusRight: liveWaveform.records + " samples  " +
+                 (liveWaveform.streams.length > 0 ? liveWaveform.streams[0].rate.toFixed(0) : "0") + " Hz"
 
     toolBarData: [
         ClassicToolButton { text: "\u2714  Enabled"; success: true; checkable: true; checked: trace.activeTab === 0; onClicked: trace.activeTab = 0 },

@@ -14,7 +14,9 @@
 #include "controllers/BusClient.h"
 #include "controllers/InventoryModel.h"
 #include "controllers/JournalController.h"
+#include "controllers/LiveWaveformController.h"
 #include "controllers/WaveformService.h"
+#include "terrapulse/messaging/inventorymap.h"
 #include "bus/Master.h"
 
 int main(int argc, char *argv[]) {
@@ -47,7 +49,12 @@ int main(int argc, char *argv[]) {
     QCommandLineOption masterOpt({"m", "master"}, "tpmaster host", "host", "127.0.0.1");
     QCommandLineOption queueOpt("queue", "Queue to view: production (live) | playback (review/tpolv)", "name", "production");
     QCommandLineOption viewOpt("view", "GUI view: full | dashboard | tprttv | tpmap/tpmv | tpolv", "name", "full");
-    parser.addOptions({masterOpt, queueOpt, viewOpt});
+    // Live waveforms come off the SeedLink backbone (a RecordStream), not the bus.
+    // --slink host:port points at a tpslinkserver's SeedLink port; empty leaves the
+    // live trace inactive (results-only console). --inventory resolves FDSN ids.
+    QCommandLineOption slinkOpt("slink", "tpslinkserver SeedLink endpoint host:port for live waveforms", "host:port", "");
+    QCommandLineOption invOpt("inventory", "Inventory JSON for FDSN station->object mapping", "file", "");
+    parser.addOptions({masterOpt, queueOpt, viewOpt, slinkOpt, invOpt});
     parser.process(app);
 
     QString requestedView = parser.value(viewOpt).toLower();
@@ -68,9 +75,23 @@ int main(int argc, char *argv[]) {
     InventoryModel    inventory(host, queue);
     JournalController journal(host, queue);
 
+    // Live-waveform RecordStream client (SeedLink backbone). Parse "host:port";
+    // port 0 (no --slink) leaves it inactive. Station map lets FDSN-named streams
+    // resolve to numeric objects, same as the processing consumers.
+    QString slinkHost = "127.0.0.1";
+    quint16 slinkPort = 0;
+    if (const QString sl = parser.value(slinkOpt); !sl.isEmpty()) {
+        const int c = sl.lastIndexOf(':');
+        slinkHost = c > 0 ? sl.left(c) : sl;
+        slinkPort = quint16((c > 0 ? sl.mid(c + 1) : QString()).toUInt());
+    }
+    LiveWaveformController liveWaveform(slinkHost, slinkPort,
+                                        tp::loadStationMap(parser.value(invOpt)));
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("appController",     &controller);
     engine.rootContext()->setContextProperty("acq",               &acq);
+    engine.rootContext()->setContextProperty("liveWaveform",      &liveWaveform);
     engine.rootContext()->setContextProperty("inventory",         &inventory);
     engine.rootContext()->setContextProperty("journalController", &journal);
     engine.rootContext()->setContextProperty("sessionQueue",
