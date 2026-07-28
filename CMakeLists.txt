@@ -362,6 +362,8 @@ qt_add_executable(appTerraPulse
     src/controllers/InventoryModel.cpp
     src/controllers/JournalController.h
     src/controllers/JournalController.cpp
+    src/controllers/LiveWaveformController.h
+    src/controllers/LiveWaveformController.cpp
     src/controllers/WaveformService.h
     src/controllers/WaveformService.cpp
 )
@@ -414,9 +416,11 @@ target_link_libraries(appTerraPulse PRIVATE
     tp_backend
     tpbus
     tpmseed
+    tpslinkcore
     Qt6::Quick
     Qt6::Charts
     Qt6::Core
+    Qt6::Network
     Qt6::QuickControls2
 )
 

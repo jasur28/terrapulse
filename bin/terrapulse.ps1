@@ -35,7 +35,7 @@ $Inv      = Join-Path $Root 'config\inventory.example.json'
 $LogDir   = Join-Path $Root 'var\logs'
 $Tds      = Join-Path $Root 'var\tds'
 
-$Modules = @('tpmaster','tpproc','tpevent','tpwfparam','tpqc','tpalert','tpevtlog','tprelay',
+$Modules = @('tpmaster','tpslinkserver','tpproc','tpevent','tpwfparam','tpqc','tpalert','tpevtlog','tprelay',
              'tpws','tphubmon','tpdiskmon','tpconfig','tpacq','tpslink','tpstore','tpmm','tpjournal','tpinv',
              'appTerraPulse')
 $env:Path = "$QtBin;$MinGWBin;$env:Path"
@@ -120,6 +120,17 @@ switch ($Command) {
         Start-Module 'tpmaster' @('--db', $Db)
         Start-Sleep -Milliseconds 500
         if (-not $NoInventory -and (Test-Path $Inv)) { Start-Module 'tpinv' @('--file', $Inv) }
+
+        # SeedLink backbone (SeisComp RecordStream model): tpacq feeds ready records
+        # to the server's feed port (18001); the server keeps a live ring and serves
+        # SeedLink on 18000 to the console's live trace and any --slink consumer.
+        # Waveforms travel here, not over the broker; the durable archive stays with
+        # tpacq --archive below (single writer). Inventory resolves FDSN stream ids.
+        $SlinkArgs = @('--port', '18000', '--feed-port', '18001')
+        if (-not $NoInventory -and (Test-Path $Inv)) { $SlinkArgs += @('--inventory', $Inv) }
+        Start-Module 'tpslinkserver' $SlinkArgs
+        Start-Sleep -Milliseconds 300
+
         Start-Module 'tpproc' @()
         Start-Module 'tpevent' @()
         Start-Module 'tpwfparam' @()
@@ -130,15 +141,23 @@ switch ($Command) {
         Start-Module 'tphubmon' @('--port', '8081')
 
         # tpacq: archive raw waveforms to TDS (feeds console review + replay) and
-        # buffer 60 s of samples to survive a broker restart (store-and-forward).
-        if ($Port) { Start-Module 'tpacq' @('--port', $Port, '--object', '1', '--station', '1', '--sensor', '1', '--archive', $Tds) }
-        else       { Start-Module 'tpacq' @('--sim', '--rate', "$Rate", '--archive', $Tds); Write-Host "  (synthetic source; use -Port COM6 for the device)" -ForegroundColor DarkGray }
+        # feed the SeedLink backbone (--slink -> tpslinkserver feed port). It still
+        # publishes raw. to the broker so bus-based pages (Monitoring) keep working;
+        # the live trace reads the SeedLink ring instead.
+        if ($Port) { Start-Module 'tpacq' @('--port', $Port, '--object', '1', '--station', '1', '--sensor', '1', '--archive', $Tds, '--slink', '127.0.0.1:18001') }
+        else       { Start-Module 'tpacq' @('--sim', '--rate', "$Rate", '--archive', $Tds, '--slink', '127.0.0.1:18001'); Write-Host "  (synthetic source; use -Port COM6 for the device)" -ForegroundColor DarkGray }
 
         # Second device (SM-3) = object 2, sensor 2 — matches the SM-3 entry in
         # config/inventory.example.json (Tower-A, basement, seismometer).
-        if ($Port2) { Start-Module 'tpacq' @('--port', $Port2, '--object', '2', '--station', '2', '--sensor', '2', '--archive', $Tds) }
+        if ($Port2) { Start-Module 'tpacq' @('--port', $Port2, '--object', '2', '--station', '2', '--sensor', '2', '--archive', $Tds, '--slink', '127.0.0.1:18001') }
 
-        if (-not $NoGui) { Start-Module 'appTerraPulse' @('--view', $View) -Gui }
+        # Console: analysis results over the broker (AppController), live waveforms
+        # over the SeedLink backbone (--slink -> tpslinkserver serve port 18000).
+        if (-not $NoGui) {
+            $GuiArgs = @('--view', $View, '--slink', '127.0.0.1:18000')
+            if (-not $NoInventory -and (Test-Path $Inv)) { $GuiArgs += @('--inventory', $Inv) }
+            Start-Module 'appTerraPulse' $GuiArgs -Gui
+        }
 
         Write-Host "TerraPulse is up.  Logs: $LogDir   Stop: .\bin\terrapulse.ps1 stop" -ForegroundColor Cyan
     }
