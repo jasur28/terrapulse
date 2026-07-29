@@ -652,6 +652,8 @@ def main(argv):
     p.add_argument("--sensor")
     p.add_argument("--inventory")
     p.add_argument("--db")
+    p.add_argument("--sim-events", dest="sim_events", action="store_true",
+                   help="sim source: inject periodic bursts so anomalies fire (demo)")
     for verb in ("enable", "disable"):
         e = sub.add_parser(verb)
         e.add_argument("modules", nargs="+")
@@ -694,6 +696,7 @@ def main(argv):
             "backbone_host": ns.backbone_host, "stations": ns.stations, "source": ns.source,
             "rate": ns.rate, "object": ns.object, "station": ns.station, "sensor": ns.sensor,
             "inventory": ns.inventory, "db": ns.db,
+            "sim_events": "1" if ns.sim_events else None,
         }
         command_setup(root, ns.role, overrides)
     elif ns.command in ("enable", "disable"):

@@ -10,6 +10,8 @@ class Module:
         source = env.param("source", "sim")
         if source == "sim":
             args = ["--sim", "--rate", env.param("rate", 200)]
+            if env.param("sim_events"):        # periodic bursts -> visible anomalies (demo)
+                args += ["--sim-events"]
         elif source == "replay":
             args = ["--replay", env.param("replay", env.path("var", "replay.csv"))]
         else:
