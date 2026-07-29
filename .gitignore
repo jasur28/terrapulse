@@ -76,3 +76,9 @@ share/maps/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Per-machine role/enabled state (written by: terrapulse setup)
+etc/enabled.json
+
+# Python bytecode cache (etc/init imports)
+__pycache__/

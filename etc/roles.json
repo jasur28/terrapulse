@@ -1,0 +1,35 @@
+{
+  "_comment": "Deployment roles, the SeisComp way: same binaries, a role is just a set of enabled modules plus a few parameters. `terrapulse setup --role <name>` writes etc/enabled.json (site state). Module start arguments are built from these params by etc/init/<module>.py start_args(env).",
+  "roles": {
+    "standalone": {
+      "description": "Everything on one machine (demo / development): broker, SeedLink backbone, a simulated source, and the full processing tier.",
+      "enable": ["tpmaster", "tpinv", "tpslinkserver", "tpacq", "tpproc", "tpqc", "tpwfparam", "tpevent"],
+      "params": {"source": "sim", "center_host": "127.0.0.1", "slink_serve": 18000, "slink_feed": 18001, "stations": ""}
+    },
+    "center": {
+      "description": "Object monitoring centre: broker, backbone server, processing and web services. No local source - field nodes feed it over the LAN.",
+      "enable": ["tpmaster", "tpinv", "tpslinkserver", "tpproc", "tpqc", "tpwfparam", "tpevent", "tpws"],
+      "params": {"center_host": "127.0.0.1", "slink_serve": 18000, "slink_feed": 18001, "stations": ""}
+    },
+    "hub": {
+      "description": "Field node next to the sensors: acquisition only, feeds the centre over SeedLink (push). The lightest build (TP_BUILD_GUI=OFF).",
+      "enable": ["tpacq"],
+      "params": {"source": "sim", "center_host": "127.0.0.1", "slink_feed": 18001}
+    },
+    "processor": {
+      "description": "Dedicated processing node: reads the centre's backbone and handles one station partition.",
+      "enable": ["tpproc", "tpqc", "tpwfparam"],
+      "params": {"center_host": "127.0.0.1", "slink_serve": 18000, "stations": ""}
+    },
+    "playback": {
+      "description": "Replay archived data as if it were live, for tests and presentations.",
+      "enable": ["tpmaster", "tpinv", "tpslinkserver", "tpacq", "tpproc", "tpqc"],
+      "params": {"source": "replay", "queue": "playback", "center_host": "127.0.0.1", "slink_serve": 18000, "slink_feed": 18001, "stations": ""}
+    },
+    "gui": {
+      "description": "Operator workstation. GUI views are not daemons - run them with `terrapulse exec tprttv|tpmap|tpolv|tpconfig`.",
+      "enable": [],
+      "params": {"center_host": "127.0.0.1", "slink_serve": 18000}
+    }
+  }
+}

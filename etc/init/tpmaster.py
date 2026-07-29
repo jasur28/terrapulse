@@ -1,11 +1,10 @@
 class Module:
-    order = -1
+    order = 0
     daemon = True
     core = True
 
     def start_args(self, env):
-        db = env.get("queues.production.processors.messages.dbstore.write", "var/lib/terrapulse.db")
-        return ["--db", db]
+        return ["--db", env.param("db", "terrapulse.db")]
 
     def update_config(self, env):
         return 0

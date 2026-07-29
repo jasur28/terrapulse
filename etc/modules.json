@@ -1,70 +1,23 @@
 {
+  "_comment": "Module catalogue: every known TerraPulse module. `order` sets daemon start order (low first). A machine's role (etc/enabled.json, set by `terrapulse setup --role`) picks which of these are enabled.",
   "modules": [
-    {
-      "name": "tpmaster",
-      "category": "messaging",
-      "daemon": true,
-      "description": "Central TerraPulse message broker and storage coordinator"
-    },
-    {
-      "name": "tpacq",
-      "category": "acquisition",
-      "daemon": true,
-      "description": "Accelerometer acquisition from serial/network adapters"
-    },
-    {
-      "name": "tpslink",
-      "category": "acquisition",
-      "daemon": true,
-      "description": "SeedLink/miniSEED acquisition bridge"
-    },
-    {
-      "name": "tpproc",
-      "category": "processing",
-      "daemon": true,
-      "description": "Structural-health processing pipeline"
-    },
-    {
-      "name": "tpevent",
-      "category": "processing",
-      "daemon": true,
-      "description": "Structure event association"
-    },
-    {
-      "name": "tpqc",
-      "category": "quality-control",
-      "daemon": true,
-      "description": "Latency, gap, spike and availability metrics"
-    },
-    {
-      "name": "tpmap",
-      "category": "gui",
-      "daemon": false,
-      "description": "Live structure map, inspired by scmv"
-    },
-    {
-      "name": "tpmv",
-      "category": "gui",
-      "daemon": false,
-      "description": "Map view alias for tpmap, inspired by scmv/scmvx"
-    },
-    {
-      "name": "tprttv",
-      "category": "gui",
-      "daemon": false,
-      "description": "Real-time acceleration traces, inspired by scrttv"
-    },
-    {
-      "name": "tpolv",
-      "category": "gui",
-      "daemon": false,
-      "description": "Operator event review, inspired by scolv"
-    },
-    {
-      "name": "tpconfig",
-      "category": "gui",
-      "daemon": false,
-      "description": "Configuration, inventory and bindings editor"
-    }
+    { "name": "tpmaster",     "category": "messaging",        "daemon": true,  "core": true, "order": 0,   "description": "Central message broker and storage coordinator" },
+    { "name": "tpinv",        "category": "inventory",        "daemon": true,  "order": 5,   "description": "Publish accelerometer inventory to the broker" },
+    { "name": "tpslinkserver","category": "acquisition",      "daemon": true,  "order": 10,  "description": "SeedLink backbone: ring buffer + record feed + serve" },
+    { "name": "tpacq",        "category": "acquisition",      "daemon": true,  "order": 20,  "description": "Accelerometer acquisition from serial/network adapters" },
+    { "name": "tpslink",      "category": "acquisition",      "daemon": true,  "order": 20,  "description": "SeedLink/miniSEED acquisition bridge (external sources)" },
+    { "name": "tpproc",       "category": "processing",       "daemon": true,  "order": 30,  "description": "Structural-health processing pipeline (SAF/SHF)" },
+    { "name": "tpqc",         "category": "quality-control",  "daemon": true,  "order": 30,  "description": "Latency, gap, spike and availability metrics" },
+    { "name": "tpwfparam",    "category": "processing",       "daemon": true,  "order": 30,  "description": "Strong-motion parameters (PGA/PGV/response spectrum)" },
+    { "name": "tpevent",      "category": "processing",       "daemon": true,  "order": 40,  "description": "Structure event association" },
+    { "name": "tpalert",      "category": "processing",       "daemon": true,  "order": 45,  "description": "Alert generation from anomalies and events" },
+    { "name": "tpevtlog",     "category": "processing",       "daemon": true,  "order": 45,  "description": "Event log archive" },
+    { "name": "tpws",         "category": "services",         "daemon": true,  "order": 50,  "description": "Web services (status, waveform, FDSN-style)" },
+    { "name": "tphubmon",     "category": "services",         "daemon": true,  "order": 50,  "description": "Hub/node monitoring endpoint" },
+    { "name": "tpmap",        "category": "gui",              "daemon": false, "order": 100, "description": "Live structure map, inspired by scmv" },
+    { "name": "tpmv",         "category": "gui",              "daemon": false, "order": 100, "description": "Map view alias for tpmap, inspired by scmv/scmvx" },
+    { "name": "tprttv",       "category": "gui",              "daemon": false, "order": 100, "description": "Real-time acceleration traces, inspired by scrttv" },
+    { "name": "tpolv",        "category": "gui",              "daemon": false, "order": 100, "description": "Operator event review, inspired by scolv" },
+    { "name": "tpconfig",     "category": "gui",              "daemon": false, "order": 100, "description": "Configuration, inventory and bindings editor" }
   ]
 }

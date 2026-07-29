@@ -2,46 +2,76 @@
 """
 TerraPulse management command.
 
-Clean-room equivalent of SeisComp's top-level control command. It reads
-etc/modules.json and manages daemon modules from one place.
+Clean-room equivalent of SeisComp's top-level control command. The same binaries
+run everywhere; a machine's ROLE is just a set of enabled modules plus a few
+parameters. `terrapulse setup --role <name>` reads etc/roles.json and writes the
+site state etc/enabled.json. Module start arguments are not hard-coded here - each
+module's etc/init/<module>.py start_args(env) builds them from the role parameters
+and config, so the same command drives a Raspberry Pi hub and a monitoring centre.
+
+  terrapulse setup --role standalone|center|hub|processor|playback|gui [--center-host H --stations 1,2 ...]
+  terrapulse enable  <module>...
+  terrapulse disable <module>...
+  terrapulse list | status | check
+  terrapulse start | stop | restart [module...]   # no names => the enabled daemons, in order
+  terrapulse exec <gui-module> [args...]
 """
 
 import argparse
+import importlib.util
 import json
 import os
+import platform
 import signal
 import subprocess
 import sys
 from pathlib import Path
 
+IS_WIN = platform.system() == "Windows"
+
 
 def root_dir():
     env = os.environ.get("TP_ROOT")
-    if env:
-        return Path(env).resolve()
-    return Path(__file__).resolve().parents[1]
+    return Path(env).resolve() if env else Path(__file__).resolve().parents[1]
+
+
+def load_json(path, default):
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return default
 
 
 def load_modules(root):
-    path = root / "etc" / "modules.json"
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get("modules", [])
+    return load_json(root / "etc" / "modules.json", {}).get("modules", [])
+
+
+def load_roles(root):
+    return load_json(root / "etc" / "roles.json", {}).get("roles", {})
+
+
+def enabled_path(root):
+    return root / "etc" / "enabled.json"
+
+
+def load_enabled(root):
+    return load_json(enabled_path(root), {"role": None, "enabled": [], "params": {}})
+
+
+def save_enabled(root, state):
+    with enabled_path(root).open("w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+        f.write("\n")
 
 
 def build_dir(root):
     env = os.environ.get("TP_BUILD")
-    if env:
-        return Path(env).resolve()
-    return root / "build" / "Desktop_Qt_6_9_3_MinGW_64_bit-Debug"
+    return Path(env).resolve() if env else root / "build" / "Desktop_Qt_6_9_3_MinGW_64_bit-Debug"
 
 
 def bin_path(root, module):
-    candidates = [
-        build_dir(root) / f"{module}.exe",
-        build_dir(root) / module,
-        root / "bin" / module,
-    ]
+    candidates = [build_dir(root) / f"{module}.exe", build_dir(root) / module, root / "bin" / module]
     if module in ("tpmap", "tpmv", "tprttv", "tpolv"):
         candidates.insert(0, build_dir(root) / "appTerraPulse.exe")
         candidates.insert(1, build_dir(root) / "appTerraPulse")
@@ -51,6 +81,75 @@ def bin_path(root, module):
     return candidates[0]
 
 
+# ── config + role parameters exposed to etc/init start_args ────────────────────
+def load_config(root):
+    """Flat merge of etc/defaults/*.cfg then etc/*.cfg (key = value lines)."""
+    cfg = {}
+    for d in (root / "etc" / "defaults", root / "etc"):
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.cfg")):
+            for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = line.split("#", 1)[0].strip()
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    cfg[k.strip()] = v.strip()
+    return cfg
+
+
+class Env:
+    """Passed to etc/init/<module>.py start_args(env)."""
+    def __init__(self, root, cfg, role, params):
+        self.root = root
+        self._cfg = cfg
+        self.role = role
+        self._params = params or {}
+
+    def get(self, key, default=None):
+        return self._cfg.get(key, default)
+
+    def param(self, key, default=None):
+        v = self._params.get(key)
+        return default if v in (None, "") else v
+
+    def path(self, *parts):
+        return str(self.root.joinpath(*parts))
+
+    def log(self, message):
+        print(message)
+
+
+def make_env(root):
+    state = load_enabled(root)
+    return Env(root, load_config(root), state.get("role"), state.get("params", {}))
+
+
+def load_init(root, name):
+    path = root / "etc" / "init" / f"{name}.py"
+    if not path.exists():
+        return None
+    spec = importlib.util.spec_from_file_location(f"tpinit_{name}", path)
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    except Exception as exc:  # a broken init file must not take down the command
+        print(f"! {name}: init load failed: {exc}")
+        return None
+    cls = getattr(mod, "Module", None)
+    return cls() if cls else None
+
+
+def module_args(root, env, name):
+    init = load_init(root, name)
+    if init is not None and hasattr(init, "start_args"):
+        try:
+            return [str(a) for a in (init.start_args(env) or [])]
+        except Exception as exc:
+            print(f"! {name}: start_args failed: {exc}")
+    return []
+
+
+# ── process management (cross-platform) ────────────────────────────────────────
 def pid_dir(root):
     path = root / "var" / "run"
     path.mkdir(parents=True, exist_ok=True)
@@ -80,6 +179,10 @@ def read_pid(root, module):
 def is_running(pid):
     if not pid:
         return False
+    if IS_WIN:
+        r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                           capture_output=True, text=True)
+        return f'"{pid}"' in r.stdout
     try:
         os.kill(pid, 0)
         return True
@@ -87,57 +190,112 @@ def is_running(pid):
         return False
 
 
+def terminate(pid):
+    if IS_WIN:
+        subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+    else:
+        os.kill(pid, signal.SIGTERM)
+
+
+# ── module selection ───────────────────────────────────────────────────────────
 def daemon_modules(modules):
     return [m for m in modules if m.get("daemon", False)]
 
 
-def select_modules(modules, names):
+def by_name(modules):
+    return {m["name"]: m for m in modules}
+
+
+def enabled_daemons(root, modules):
+    """Enabled daemon modules, in start order."""
+    state = load_enabled(root)
+    names = state.get("enabled", [])
+    reg = by_name(modules)
+    picked = [reg[n] for n in names if n in reg and reg[n].get("daemon")]
+    return sorted(picked, key=lambda m: m.get("order", 100))
+
+
+def select_modules(root, modules, names):
     if not names:
-        return daemon_modules(modules)
-    by_name = {m["name"]: m for m in modules}
-    selected = []
-    for name in names:
-        if name not in by_name:
-            raise SystemExit(f"unknown module: {name}")
-        selected.append(by_name[name])
-    return selected
+        return enabled_daemons(root, modules)
+    reg = by_name(modules)
+    out = []
+    for n in names:
+        if n not in reg:
+            raise SystemExit(f"unknown module: {n}")
+        out.append(reg[n])
+    return out
 
 
+# ── commands ───────────────────────────────────────────────────────────────────
 def command_list(root, modules):
+    state = load_enabled(root)
+    enabled = set(state.get("enabled", []))
+    print(f"role: {state.get('role') or '(unset - run: terrapulse setup --role <name>)'}")
     for m in modules:
+        mark = "*" if m["name"] in enabled else " "
         kind = "daemon" if m.get("daemon") else "gui"
-        print(f"{m['name']:<12} {kind:<7} {m.get('category',''):<16} {m.get('description','')}")
+        print(f" {mark} {m['name']:<13} {kind:<7} {m.get('category',''):<15} {m.get('description','')}")
+
+
+def command_roles(root):
+    for name, role in load_roles(root).items():
+        print(f"{name:<12} {role.get('description','')}")
+        print(f"             enable: {', '.join(role.get('enable', [])) or '(none)'}")
+
+
+def command_setup(root, role_name, overrides):
+    roles = load_roles(root)
+    if role_name not in roles:
+        raise SystemExit(f"unknown role '{role_name}' (have: {', '.join(roles)})")
+    role = roles[role_name]
+    params = dict(role.get("params", {}))
+    params.update({k: v for k, v in overrides.items() if v is not None})
+    state = {"role": role_name, "enabled": list(role.get("enable", [])), "params": params}
+    save_enabled(root, state)
+    print(f"role '{role_name}' - {role.get('description','')}")
+    print(f"enabled: {', '.join(state['enabled']) or '(none - GUI views via `terrapulse exec`)'}")
+    for k, v in params.items():
+        print(f"  {k} = {v}")
+    print("next: terrapulse start")
+
+
+def command_toggle(root, names, on):
+    state = load_enabled(root)
+    s = set(state.get("enabled", []))
+    for n in names:
+        s.add(n) if on else s.discard(n)
+    state["enabled"] = sorted(s)
+    save_enabled(root, state)
+    print(("enabled: " if on else "disabled: ") + ", ".join(names))
 
 
 def command_check(root, modules):
     errors = 0
-    for m in modules:
+    for m in enabled_daemons(root, modules) or daemon_modules(modules):
         exe = bin_path(root, m["name"])
-        if m.get("daemon") and not exe.exists():
+        if not exe.exists():
             print(f"! {m['name']}: executable not found: {exe}")
             errors += 1
-        cfg = root / "etc" / "defaults" / f"{m['name']}.cfg"
-        if not cfg.exists() and m.get("daemon"):
-            print(f"! {m['name']}: default config missing: {cfg}")
-            errors += 1
-    if errors:
-        return 1
-    print("OK")
-    return 0
+    print("problems found" if errors else "OK")
+    return 1 if errors else 0
 
 
 def command_status(root, modules):
+    state = load_enabled(root)
+    enabled = set(state.get("enabled", []))
     for m in modules:
+        if m["name"] not in enabled and not read_pid(root, m["name"]):
+            continue
         pid = read_pid(root, m["name"])
-        state = "running" if is_running(pid) else "stopped"
-        suffix = f" pid={pid}" if pid else ""
-        print(f"{m['name']:<12} {state}{suffix}")
+        run = "running" if is_running(pid) else "stopped"
+        print(f"{m['name']:<13} {run}{f' pid={pid}' if pid else ''}")
 
 
-def start_one(root, module):
+def start_one(root, env, module):
     name = module["name"]
     if not module.get("daemon"):
-        print(f"{name}: GUI module, use `terrapulse exec {name}`")
+        print(f"{name}: GUI module - use `terrapulse exec {name}`")
         return
     pid = read_pid(root, name)
     if is_running(pid):
@@ -147,11 +305,12 @@ def start_one(root, module):
     if not exe.exists():
         print(f"{name}: executable not found: {exe}")
         return
+    args = module_args(root, env, name)
     out = open(log_dir(root) / f"{name}.log", "ab")
     err = open(log_dir(root) / f"{name}.err", "ab")
-    proc = subprocess.Popen([str(exe)], cwd=str(root), stdout=out, stderr=err)
+    proc = subprocess.Popen([str(exe)] + args, cwd=str(root), stdout=out, stderr=err)
     pid_file(root, name).write_text(str(proc.pid), encoding="utf-8")
-    print(f"{name}: started pid={proc.pid}")
+    print(f"{name}: started pid={proc.pid}  {' '.join(args)}")
 
 
 def stop_one(root, module):
@@ -159,8 +318,10 @@ def stop_one(root, module):
     pid = read_pid(root, name)
     if not is_running(pid):
         print(f"{name}: stopped")
+        pid_file(root, name).unlink(missing_ok=True)
         return
-    os.kill(pid, signal.SIGTERM)
+    terminate(pid)
+    pid_file(root, name).unlink(missing_ok=True)
     print(f"{name}: stopping pid={pid}")
 
 
@@ -172,6 +333,8 @@ def exec_one(root, name, args):
     if name in ("tpmap", "tpmv", "tprttv", "tpolv") and exe.name.startswith("appTerraPulse"):
         argv += ["--view", name]
     argv += args
+    if IS_WIN:
+        raise SystemExit(subprocess.call(argv))
     os.execv(str(exe), argv)
 
 
@@ -179,8 +342,23 @@ def main(argv):
     parser = argparse.ArgumentParser(prog="terrapulse")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list")
+    sub.add_parser("roles")
     sub.add_parser("check")
     sub.add_parser("status")
+    p = sub.add_parser("setup")
+    p.add_argument("--role", required=True)
+    p.add_argument("--center-host", dest="center_host")
+    p.add_argument("--stations")
+    p.add_argument("--source")       # sim | replay | a device (COM6, /dev/ttyUSB0)
+    p.add_argument("--rate")
+    p.add_argument("--object")
+    p.add_argument("--station")
+    p.add_argument("--sensor")
+    p.add_argument("--inventory")
+    p.add_argument("--db")
+    for verb in ("enable", "disable"):
+        e = sub.add_parser(verb)
+        e.add_argument("modules", nargs="+")
     for name in ("start", "stop", "restart"):
         p = sub.add_parser(name)
         p.add_argument("modules", nargs="*")
@@ -194,22 +372,35 @@ def main(argv):
 
     if ns.command == "list":
         command_list(root, modules)
+    elif ns.command == "roles":
+        command_roles(root)
     elif ns.command == "check":
         return command_check(root, modules)
     elif ns.command == "status":
         command_status(root, modules)
+    elif ns.command == "setup":
+        overrides = {
+            "center_host": ns.center_host, "stations": ns.stations, "source": ns.source,
+            "rate": ns.rate, "object": ns.object, "station": ns.station, "sensor": ns.sensor,
+            "inventory": ns.inventory, "db": ns.db,
+        }
+        command_setup(root, ns.role, overrides)
+    elif ns.command in ("enable", "disable"):
+        command_toggle(root, ns.modules, ns.command == "enable")
     elif ns.command == "start":
-        for m in select_modules(modules, ns.modules):
-            start_one(root, m)
+        env = make_env(root)
+        for m in select_modules(root, modules, ns.modules):
+            start_one(root, env, m)
     elif ns.command == "stop":
-        for m in select_modules(modules, ns.modules):
+        for m in select_modules(root, modules, ns.modules):
             stop_one(root, m)
     elif ns.command == "restart":
-        selected = select_modules(modules, ns.modules)
+        env = make_env(root)
+        selected = select_modules(root, modules, ns.modules)
         for m in selected:
             stop_one(root, m)
         for m in selected:
-            start_one(root, m)
+            start_one(root, env, m)
     elif ns.command == "exec":
         exec_one(root, ns.module, ns.args)
     return 0
