@@ -281,6 +281,51 @@ def command_check(root, modules):
     return 1 if errors else 0
 
 
+def command_update_config(root, modules):
+    """Validate the configuration (SeisComp's update-config / scchkcfg role):
+    every per-sensor binding must name a known module and an existing profile,
+    and every enabled daemon must have an executable and shipped defaults."""
+    reg = by_name(modules)
+    problems = 0
+    print(f"configuration root: {root}")
+
+    keydir = root / "etc" / "key"
+    if not keydir.is_dir():
+        print("no bindings (etc/key missing) - all sensors use global config")
+    else:
+        print("bindings:")
+        for kf in sorted(keydir.glob("sensor_*")):
+            print(f"  {kf.name}")
+            for line in kf.read_text(encoding="utf-8", errors="ignore").splitlines():
+                t = line.split("#", 1)[0].strip()
+                if not t:
+                    continue
+                mod, _, prof = t.partition(":")
+                mod, prof = mod.strip(), prof.strip()
+                if mod not in reg:
+                    print(f"    ! unknown module '{mod}'")
+                    problems += 1
+                elif prof:
+                    pf = root / "etc" / mod / f"profile_{prof}.cfg"
+                    if pf.exists():
+                        print(f"    {mod} -> profile '{prof}'")
+                    else:
+                        print(f"    ! {mod}: profile '{prof}' not found ({pf})")
+                        problems += 1
+                else:
+                    print(f"    {mod} (module config)")
+
+    for m in enabled_daemons(root, modules):
+        if not bin_path(root, m["name"]).exists():
+            print(f"! {m['name']}: executable not found")
+            problems += 1
+        elif not (root / "etc" / "defaults" / f"{m['name']}.cfg").exists():
+            print(f"  {m['name']}: no shipped defaults (etc/defaults/{m['name']}.cfg)")
+
+    print(f"\n{'OK - no problems.' if problems == 0 else str(problems) + ' problem(s) found.'}")
+    return 1 if problems else 0
+
+
 def command_status(root, modules):
     state = load_enabled(root)
     enabled = set(state.get("enabled", []))
@@ -344,6 +389,7 @@ def main(argv):
     sub.add_parser("list")
     sub.add_parser("roles")
     sub.add_parser("check")
+    sub.add_parser("update-config")
     sub.add_parser("status")
     p = sub.add_parser("setup")
     p.add_argument("--role", required=True)
@@ -376,6 +422,8 @@ def main(argv):
         command_roles(root)
     elif ns.command == "check":
         return command_check(root, modules)
+    elif ns.command == "update-config":
+        return command_update_config(root, modules)
     elif ns.command == "status":
         command_status(root, modules)
     elif ns.command == "setup":
