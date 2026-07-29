@@ -9,4 +9,5 @@ class Module:
         inv = env.param("inventory", "config/inventory.example.json")
         if inv:
             args += ["--inventory", inv]
+        args += env.queue_args()
         return args

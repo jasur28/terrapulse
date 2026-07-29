@@ -141,6 +141,12 @@ class Env:
         v = self._params.get(key)
         return default if v in (None, "") else v
 
+    def queue_args(self):
+        # A role that sets a queue (e.g. playback) runs a separate pipeline; modules
+        # that accept --queue must be told. Unset => the module's default (production).
+        q = self.param("queue")
+        return ["--queue", q] if q else []
+
     def path(self, *parts):
         # "var/..." resolves under the state dir so it works installed too.
         if parts and parts[0] == "var":
@@ -382,8 +388,13 @@ def command_status(root, modules):
         if m["name"] not in enabled and not read_pid(root, m["name"]):
             continue
         pid = read_pid(root, m["name"])
-        run = "running" if is_running(pid) else "stopped"
-        print(f"{m['name']:<13} {run}{f' pid={pid}' if pid else ''}")
+        if is_running(pid):
+            run = f"running pid={pid}"
+        elif m.get("oneshot"):
+            run = "one-shot (ran at start)"          # expected to have exited
+        else:
+            run = "stopped"
+        print(f"{m['name']:<13} {run}")
 
 
 def start_one(root, env, module):

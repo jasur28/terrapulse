@@ -25,4 +25,5 @@ class Module:
 
         if env.role == "acquisition":
             args += ["--no-bus"]           # no local broker on an acquisition node
+        args += env.queue_args()
         return args

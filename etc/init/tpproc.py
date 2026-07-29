@@ -13,4 +13,5 @@ class Module:
         stations = env.param("stations", "")
         if stations:
             args += ["--stations", stations]
+        args += env.queue_args()
         return args

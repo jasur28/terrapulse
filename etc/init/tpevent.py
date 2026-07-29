@@ -4,4 +4,4 @@ class Module:
 
     # Event association reads results off the broker; no extra arguments.
     def start_args(self, env):
-        return []
+        return env.queue_args()

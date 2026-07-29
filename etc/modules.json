@@ -2,7 +2,7 @@
   "_comment": "Module catalogue: every known TerraPulse module. `order` sets daemon start order (low first). A machine's role (etc/enabled.json, set by `terrapulse setup --role`) picks which of these are enabled.",
   "modules": [
     { "name": "tpmaster",     "category": "messaging",        "daemon": true,  "core": true, "order": 0,   "description": "Central message broker and storage coordinator" },
-    { "name": "tpinv",        "category": "inventory",        "daemon": true,  "order": 5,   "description": "Publish accelerometer inventory to the broker" },
+    { "name": "tpinv",        "category": "inventory",        "daemon": true,  "oneshot": true, "order": 5,   "description": "Publish accelerometer inventory to the broker (runs once, then exits)" },
     { "name": "tpslinkserver","category": "acquisition",      "daemon": true,  "order": 10,  "description": "SeedLink backbone: ring buffer + record feed + serve" },
     { "name": "tpacq",        "category": "acquisition",      "daemon": true,  "order": 20,  "description": "Accelerometer acquisition from serial/network adapters" },
     { "name": "tpslink",      "category": "acquisition",      "daemon": true,  "order": 20,  "description": "SeedLink/miniSEED acquisition bridge (external sources)" },

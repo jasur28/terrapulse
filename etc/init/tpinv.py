@@ -3,4 +3,4 @@ class Module:
     order = 5
 
     def start_args(self, env):
-        return ["--file", env.param("inventory", "config/inventory.example.json")]
+        return ["--file", env.param("inventory", "config/inventory.example.json")] + env.queue_args()
