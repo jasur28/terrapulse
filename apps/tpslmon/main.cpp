@@ -1,9 +1,9 @@
-// tphubmon — acquisition status page (SeisComp slmon2). Serves a small
+// tpslmon — acquisition status page (SeisComp slmon2). Serves a small
 // self-refreshing HTML dashboard showing which modules are alive and whether each
 // sensor's data is actually arriving. Deliberately dependency-free: a maintenance
 // technician on site opens a browser, no TerraPulse client needed.
 //
-//   tphubmon [--master host] [--port 8081]
+//   tpslmon [--master host] [--port 8081]
 
 #include "terrapulse/client/application.h"
 
@@ -38,11 +38,11 @@ public:
 
         QObject::connect(&m_server, &QTcpServer::newConnection, [this]() { serve(); });
         if (!m_server.listen(QHostAddress::Any, m_port)) {
-            std::fprintf(stderr, "tphubmon: cannot listen on port %u: %s\n", m_port,
+            std::fprintf(stderr, "tpslmon: cannot listen on port %u: %s\n", m_port,
                          m_server.errorString().toUtf8().constData());
             return false;
         }
-        std::printf("[tphubmon] http://localhost:%u/\n", m_port);
+        std::printf("[tpslmon] http://localhost:%u/\n", m_port);
         std::fflush(stdout);
         return true;
     }
@@ -149,10 +149,10 @@ private:
 
 int main(int argc, char* argv[]) {
     QCoreApplication app(argc, argv);
-    QCoreApplication::setApplicationName("tphubmon");
+    QCoreApplication::setApplicationName("tpslmon");
 
     tp::Config cfg;
-    cfg.load("tphubmon");
+    cfg.load("tpslmon");
 
     QCommandLineParser parser;
     parser.setApplicationDescription("TerraPulse acquisition status page");
@@ -165,7 +165,7 @@ int main(int argc, char* argv[]) {
     parser.process(app);
 
     tp::client::ApplicationSettings settings;
-    settings.moduleName    = "tphubmon";
+    settings.moduleName    = "tpslmon";
     settings.masterHost    = parser.value(masterOpt);
     settings.queue         = "production";
     settings.subscriptions = {"soh.", "qc."};

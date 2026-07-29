@@ -39,7 +39,7 @@ Authors: Lutfulla Yuldashev · Jasur Yuldashev
 | **tpevtlog** | Appends each event's evolution to per-event log files (audit history) |
 | **tprelay** | Forwards selected groups to another tpmaster (building → city → country) |
 | **tpws** | REST/JSON web service + live SSE stream + waveform endpoint (read-only) |
-| **tphubmon** | Self-refreshing HTML acquisition status page (no client needed) |
+| **tpslmon** | Self-refreshing HTML acquisition status page (no client needed) |
 | **tpconfig** | Configuration editor (GUI): module settings, per-sensor bindings/profiles, inventory |
 | **tpinv** | Inventory: loads structures→sensors→channels from JSON as add/update/remove notifiers |
 | **tpjournal** | Operator actions (confirm/reject/reclassify) → audit trail |
@@ -152,7 +152,7 @@ touching files by hand.
 ## Web access
 
 `tpws` exposes the data model over HTTP (read-only) for web and mobile clients,
-and `tphubmon` serves a status page for on-site technicians:
+and `tpslmon` serves a status page for on-site technicians:
 
 ```
 http://<host>:8080/api/health      /api/structures  /api/sensors

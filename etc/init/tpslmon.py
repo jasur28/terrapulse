@@ -3,4 +3,4 @@ class Module:
     order = 50
 
     def start_args(self, env):
-        return ["--port", env.param("hubmon_port", 8081)]
+        return ["--port", env.param("slmon_port", 8081)]

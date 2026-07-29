@@ -279,10 +279,10 @@ add_executable(tpreport tools/tpreport.cpp)
 target_include_directories(tpreport PRIVATE src)
 target_link_libraries(tpreport PRIVATE Qt6::Core Qt6::Gui Qt6::Sql)
 
-# ── tphubmon — acquisition status web page ────────────────────────────────────
-add_executable(tphubmon apps/tphubmon/main.cpp)
-target_include_directories(tphubmon PRIVATE src)
-target_link_libraries(tphubmon PRIVATE tpclient tpbus tpcfg Qt6::Core Qt6::Network)
+# ── tpslmon — acquisition status web page ────────────────────────────────────
+add_executable(tpslmon apps/tpslmon/main.cpp)
+target_include_directories(tpslmon PRIVATE src)
+target_link_libraries(tpslmon PRIVATE tpclient tpbus tpcfg Qt6::Core Qt6::Network)
 
 # ── tpconfig — configuration / bindings / inventory editor (GUI) ──────────────
 if(TP_BUILD_GUI)
@@ -451,7 +451,7 @@ set(TP_RUNTIME_TARGETS
     tpalert
     tpevent
     tpevtlog
-    tphubmon
+    tpslmon
     tpimport
     tpinv
     tpjournal

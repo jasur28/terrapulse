@@ -13,7 +13,7 @@
     { "name": "tpalert",      "category": "processing",       "daemon": true,  "order": 45,  "description": "Alert generation from anomalies and events" },
     { "name": "tpevtlog",     "category": "processing",       "daemon": true,  "order": 45,  "description": "Event log archive" },
     { "name": "tpws",         "category": "services",         "daemon": true,  "order": 50,  "description": "Web services (status, waveform, FDSN-style)" },
-    { "name": "tphubmon",     "category": "services",         "daemon": true,  "order": 50,  "description": "Hub/node monitoring endpoint" },
+    { "name": "tpslmon",      "category": "services",         "daemon": true,  "order": 50,  "description": "Acquisition/SeedLink status page (SeisComp slmon2)" },
     { "name": "tpmap",        "category": "gui",              "daemon": false, "order": 100, "description": "Live structure map, inspired by scmv" },
     { "name": "tpmv",         "category": "gui",              "daemon": false, "order": 100, "description": "Map view alias for tpmap, inspired by scmv/scmvx" },
     { "name": "tprttv",       "category": "gui",              "daemon": false, "order": 100, "description": "Real-time acceleration traces, inspired by scrttv" },

@@ -37,7 +37,7 @@ $LogDir   = Join-Path $Root 'var\logs'
 $Tds      = Join-Path $Root 'var\tds'
 
 $Modules = @('tpmaster','tpslinkserver','tpproc','tpevent','tpwfparam','tpqc','tpalert','tpevtlog','tprelay',
-             'tpws','tphubmon','tpdiskmon','tpconfig','tpacq','tpslink','tpstore','tpmm','tpjournal','tpinv',
+             'tpws','tpslmon','tpdiskmon','tpconfig','tpacq','tpslink','tpstore','tpmm','tpjournal','tpinv',
              'appTerraPulse')
 $env:Path = "$QtBin;$MinGWBin;$env:Path"
 $env:TP_TDS = $Tds          # so the console's waveform review finds the archive
@@ -139,7 +139,7 @@ switch ($Command) {
         Start-Module 'tpalert' @()
         Start-Module 'tpevtlog' @('--dir', (Join-Path $Root 'var\events'))
         Start-Module 'tpws' @('--db', $Db, '--port', '8080', '--tds', $Tds)
-        Start-Module 'tphubmon' @('--port', '8081')
+        Start-Module 'tpslmon' @('--port', '8081')
 
         # tpacq: archive raw waveforms to TDS (feeds console review + replay) and
         # feed the SeedLink backbone (--slink -> tpslinkserver feed port). It still
