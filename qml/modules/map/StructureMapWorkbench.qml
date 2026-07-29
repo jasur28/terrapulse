@@ -6,13 +6,16 @@ import TerraPulse
 Item {
     id: root
 
-    property int mode: 0
+    // Independent layers (SeisComp scmv model): one active colour layer + additive
+    // overlays, instead of mutually-exclusive modes.
+    property int colorLayer: 0            // 0 = network health, 1 = ground motion, 2 = QC
+    property bool layerEvents: true       // overlay structural events on the map
     property int selected: -1
     property bool legendVisible: true
     property bool annotations: true
     property bool grayscaleMap: false
     property var events: []
-    readonly property var modeNames: ["Network", "Ground motion", "Quality control", "Events"]
+    readonly property var layerNames: ["Network health", "Ground motion", "Quality control"]
 
     function gmColor(value, hasData, disabled) {
         if (disabled) return "#f2f2f2"
@@ -29,14 +32,14 @@ Item {
     }
 
     function statusColor(m) {
-        if (!m || !m.hasData) return mode === 0 ? "#000000" : Theme.colorOffline
-        if (mode === 2) {
+        if (!m || !m.hasData) return colorLayer === 0 ? "#000000" : Theme.colorOffline
+        if (colorLayer === 2) {
             return m.warning >= 2 ? Theme.colorCritical
                  : m.warning >= 1 ? Theme.colorWarning
                  : Theme.colorNormal
         }
         var gm = Math.max(Math.abs(Number(m.lastX || 0)), Math.abs(Number(m.lastY || 0)), Math.abs(Number(m.lastZ || 0)))
-        if (mode === 1) return gmColor(gm, m.hasData, false)
+        if (colorLayer === 1) return gmColor(gm, m.hasData, false)
         return m.warning >= 2 ? Theme.colorCritical
              : m.warning >= 1 ? Theme.colorWarning
              : "#00e676"
@@ -54,7 +57,7 @@ Item {
                 outline: item.warning >= 2 ? "#b00000" : "#111111",
                 label: annotations ? (item.name !== undefined ? item.name : ("TP." + item.objectId)) : "",
                 alwaysLabel: annotations && i < 40,
-                shape: !item.hasData && mode === 0 ? "disabled" : "station",
+                shape: !item.hasData && colorLayer === 0 ? "disabled" : "station",
                 selected: selected === i,
                 objectId: item.objectId,
                 station: item.name || ("OBJ" + item.objectId),
@@ -92,8 +95,9 @@ Item {
     }
 
     function markerList() {
-        if (mode === 3) return stationMarkers().concat(eventMarkers())
-        return stationMarkers()
+        var out = stationMarkers()
+        if (layerEvents) out = out.concat(eventMarkers())
+        return out
     }
 
     function severityColor(level) {
@@ -144,75 +148,166 @@ Item {
         anchors.fill: parent
         spacing: 0
 
-        TabBar {
-            id: tabs
+        // Layer controls: one active colour layer + additive overlays.
+        Rectangle {
             Layout.fillWidth: true
-            currentIndex: root.mode
-            onCurrentIndexChanged: root.mode = currentIndex
+            Layout.preferredHeight: 38
+            color: Theme.surface
+            border.color: Theme.border
 
-            TabButton { text: "Network" }
-            TabButton { text: "Ground motion" }
-            TabButton { text: "Quality control" }
-            TabButton { text: "Events (" + root.events.length + ")" }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                spacing: 6
+
+                Text { text: "Colour:"; color: Theme.textSecondary; font.pixelSize: 12 }
+                ClassicToolButton { text: "Network"; checkable: true; checked: root.colorLayer === 0; onClicked: root.colorLayer = 0 }
+                ClassicToolButton { text: "QC"; checkable: true; checked: root.colorLayer === 2; onClicked: root.colorLayer = 2 }
+                ClassicToolButton { text: "Ground motion"; checkable: true; checked: root.colorLayer === 1; onClicked: root.colorLayer = 1 }
+
+                Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 22; color: Theme.border }
+
+                Text { text: "Layers:"; color: Theme.textSecondary; font.pixelSize: 12 }
+                ClassicToolButton { text: "Events (" + root.events.length + ")"; checkable: true; checked: root.layerEvents; onClicked: root.layerEvents = checked }
+                ClassicToolButton { text: "Annotations"; checkable: true; checked: root.annotations; onClicked: root.annotations = checked }
+
+                Item { Layout.fillWidth: true }
+                ClassicToolButton { text: "Legend"; checkable: true; checked: root.legendVisible; onClicked: root.legendVisible = checked }
+                ClassicToolButton { text: "Grayscale"; checkable: true; checked: root.grayscaleMap; onClicked: root.grayscaleMap = checked }
+            }
         }
 
-        StackLayout {
+        RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: root.mode === 3 ? 1 : 0
+            spacing: 0
 
-            Item {
-                Rectangle {
+            // Map with the active layers drawn on the OSM base.
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "#d0d0d0"
+                border.color: "#8d8d8d"
+
+                MapView {
+                    id: mapView
                     anchors.fill: parent
-                    anchors.margins: 8
-                    color: "#d0d0d0"
-                    border.color: "#8d8d8d"
+                    anchors.margins: 2
+                    provider: "osm"
+                    grayscale: root.grayscaleMap
+                    drawGrid: true
+                    markers: root.markerList()
+                    showLabels: root.annotations
+                    tilesUrl: (typeof mapsUrl !== "undefined" && mapsUrl !== "") ? mapsUrl + "/osm" : ""
+                    onMarkerClicked: function(index) {
+                        var m = markers[index]
+                        if (!m) return
+                        if (m.type === "event") { root.layerEvents = true }
+                        else { root.selected = index }
+                    }
+                }
 
-                    MapView {
-                        id: mapView
-                        anchors.fill: parent
-                        anchors.margins: 2
-                        provider: "osm"
-                        grayscale: root.grayscaleMap
-                        drawGrid: true
-                        markers: root.markerList()
-                        showLabels: root.annotations
-                        tilesUrl: (typeof mapsUrl !== "undefined" && mapsUrl !== "") ? mapsUrl + "/osm" : ""
-                        onMarkerClicked: function(index) {
-                            var m = markers[index]
-                            if (!m) return
-                            if (m.type === "event") {
-                                root.mode = 3
-                            } else {
-                                root.selected = index
+                MapLegend {
+                    visible: root.legendVisible
+                    mode: root.colorLayer
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.margins: 14
+                }
+
+                StationInspector {
+                    visible: root.selected >= 0
+                    marker: root.markerList()[root.selected]
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 14
+                    onCloseRequested: root.selected = -1
+                }
+            }
+
+            // Side column: structural events (EventLayer / EventData), compact.
+            Rectangle {
+                Layout.preferredWidth: 300
+                Layout.fillHeight: true
+                color: Theme.surface
+                border.color: Theme.border
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 0
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 28
+                        color: Theme.navBg
+                        border.color: Theme.border
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left
+                            anchors.leftMargin: 10
+                            text: "Events near map (" + root.events.length + ")"
+                            font.pixelSize: 11; font.bold: true; color: Theme.textPrimary
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 22
+                        color: Theme.background
+                        Row {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            spacing: 0
+                            property var w: [96, 150, 34]
+                            Repeater {
+                                model: ["Time", "Type", "Sev"]
+                                Text {
+                                    width: parent.w[index]; height: parent.height
+                                    text: modelData; font.pixelSize: 10; color: Theme.textSecondary
+                                    verticalAlignment: Text.AlignVCenter
+                                }
                             }
                         }
                     }
 
-                    MapLegend {
-                        visible: root.legendVisible
-                        mode: root.mode
-                        anchors.left: parent.left
-                        anchors.top: parent.top
-                        anchors.margins: 14
-                    }
+                    ListView {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        model: root.events
 
-                    StationInspector {
-                        visible: root.selected >= 0
-                        marker: root.markerList()[root.selected]
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 14
-                        onCloseRequested: root.selected = -1
-                    }
-                }
-            }
-
-            EventsView {
-                events: root.events
-                onShowOnMap: function(index) {
-                    if (index >= 0 && index < root.events.length) {
-                        root.mode = 0
+                        delegate: Rectangle {
+                            width: ListView.view.width
+                            height: 24
+                            color: index % 2 === 0 ? Theme.surfaceAlt : Theme.surface
+                            Row {
+                                anchors.fill: parent
+                                anchors.leftMargin: 10
+                                spacing: 0
+                                property var w: [96, 150, 34]
+                                Text {
+                                    width: parent.w[0]; height: parent.height
+                                    text: new Date(modelData.time).toLocaleTimeString(Qt.locale(), "hh:mm:ss")
+                                    font.pixelSize: 11; color: Theme.textPrimary; verticalAlignment: Text.AlignVCenter
+                                }
+                                Text {
+                                    width: parent.w[1]; height: parent.height
+                                    text: (modelData.type || "") + "  " + (modelData.region || "")
+                                    font.pixelSize: 11; color: Theme.textSecondary
+                                    verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
+                                }
+                                Item {
+                                    width: parent.w[2]; height: parent.height
+                                    Rectangle {
+                                        anchors.centerIn: parent
+                                        width: 9; height: 9; radius: 4.5
+                                        color: root.severityColor(modelData.severity)
+                                    }
+                                }
+                            }
+                        }
+                        ScrollBar.vertical: ScrollBar {}
                     }
                 }
             }
@@ -340,8 +435,8 @@ Item {
                     model: marker ? [
                         "Object:", marker.objectId,
                         "Network:", "TP",
-                        "Stream:", "TP." + marker.station + "..HH?",
-                        "Mode:", root.modeNames[root.mode],
+                        "Stream:", "TP." + marker.station + ".01.HN?",
+                        "Colour layer:", root.layerNames[root.colorLayer],
                         "Status:", marker.shape === "disabled" ? "configuration/data issue" : "available"
                     ] : []
                     Text {
