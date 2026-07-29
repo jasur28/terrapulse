@@ -4,9 +4,19 @@ project(TerraPulse VERSION 0.1 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick Charts Core QuickControls2 SerialPort Sql Network Xml)
-
-qt_standard_project_setup(REQUIRES 6.8)
+# A headless field/collector node (e.g. a Raspberry Pi running only tpacq) does not
+# need the QML console. TP_BUILD_GUI=OFF drops the Quick/Charts/QuickControls2
+# dependency and the GUI targets, so the backend builds against the stock Qt that
+# Raspberry Pi OS / Debian ship in apt (6.4) — no Qt-from-source on the device.
+option(TP_BUILD_GUI "Build the QML console (appTerraPulse) and tpconfig" ON)
+if(TP_BUILD_GUI)
+    find_package(Qt6 REQUIRED COMPONENTS Quick Charts Core QuickControls2 SerialPort Sql Network Xml)
+    qt_standard_project_setup(REQUIRES 6.8)
+else()
+    # Qt6::Gui (used by tpgui/tpreport) is part of qt6-base — no Quick/Charts needed.
+    find_package(Qt6 REQUIRED COMPONENTS Core Gui SerialPort Sql Network Xml)
+    qt_standard_project_setup()
+endif()
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -275,6 +285,7 @@ target_include_directories(tphubmon PRIVATE src)
 target_link_libraries(tphubmon PRIVATE tpclient tpbus tpcfg Qt6::Core Qt6::Network)
 
 # ── tpconfig — configuration / bindings / inventory editor (GUI) ──────────────
+if(TP_BUILD_GUI)
 qt_add_executable(tpconfig
     apps/tpconfig/main.cpp
     src/config/ConfigEditor.h
@@ -288,6 +299,7 @@ qt_add_qml_module(tpconfig
 target_include_directories(tpconfig PRIVATE src)
 target_link_libraries(tpconfig PRIVATE tpcfg tpbus Qt6::Quick Qt6::QuickControls2 Qt6::Core)
 set_target_properties(tpconfig PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
 
 # ── tpstore — storage daemon (saf/shf -> SQLite) ──────────────────────────────
 add_executable(tpstore apps/tpstore/main.cpp)
@@ -352,6 +364,7 @@ target_link_libraries(test_procpipeline PRIVATE tp_backend Qt6::Core)
 add_test(NAME procpipeline COMMAND test_procpipeline)
 
 # ── Main executable ───────────────────────────────────────────────────────────
+if(TP_BUILD_GUI)
 qt_add_executable(appTerraPulse
     main.cpp
     src/controllers/AppController.h
@@ -430,11 +443,10 @@ set_target_properties(appTerraPulse PROPERTIES
     MACOSX_BUNDLE TRUE
     WIN32_EXECUTABLE TRUE
 )
+endif()
 
 include(GNUInstallDirs)
 set(TP_RUNTIME_TARGETS
-    appTerraPulse
-    tpconfig
     tpacq
     tpalert
     tpevent
@@ -463,6 +475,9 @@ set(TP_RUNTIME_TARGETS
     tpxmldump
     tpart
 )
+if(TP_BUILD_GUI)
+    list(APPEND TP_RUNTIME_TARGETS appTerraPulse tpconfig)
+endif()
 
 install(TARGETS ${TP_RUNTIME_TARGETS}
     BUNDLE DESTINATION .
@@ -486,7 +501,7 @@ install(PROGRAMS bin/terrapulse
     DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND TP_BUILD_GUI)
     install(CODE "
         execute_process(COMMAND \${CMAKE_COMMAND} -E create_symlink appTerraPulse \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/tprttv\")
         execute_process(COMMAND \${CMAKE_COMMAND} -E create_symlink appTerraPulse \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/tpmap\")

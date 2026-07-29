@@ -23,8 +23,9 @@ param(
     [ValidateSet('full','dashboard','tprttv','tpmap','tpolv')]
     [string]$View = 'full',
     [switch]$NoGui,
-    [switch]$NoInventory
-)
+    [switch]$NoInventory,
+    [switch]$NoAcq                # monitoring center only: no local source; data
+)                                 # arrives from a field node feeding tpslinkserver
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 $QtBin    = 'D:\Qt\6.9.3\mingw_64\bin'
@@ -144,12 +145,17 @@ switch ($Command) {
         # feed the SeedLink backbone (--slink -> tpslinkserver feed port). It still
         # publishes raw. to the broker so bus-based pages (Monitoring) keep working;
         # the live trace reads the SeedLink ring instead.
-        if ($Port) { Start-Module 'tpacq' @('--port', $Port, '--object', '1', '--station', '1', '--sensor', '1', '--archive', $Tds, '--slink', '127.0.0.1:18001') }
-        else       { Start-Module 'tpacq' @('--sim', '--rate', "$Rate", '--archive', $Tds, '--slink', '127.0.0.1:18001'); Write-Host "  (synthetic source; use -Port COM6 for the device)" -ForegroundColor DarkGray }
+        # -NoAcq: run as a monitoring centre only — start no local source. A field
+        # node (e.g. a Raspberry Pi running tpacq) feeds tpslinkserver over the LAN.
+        if ($NoAcq) {
+            Write-Host "  (no local source; waiting for a field node to feed :18001)" -ForegroundColor DarkGray
+        }
+        elseif ($Port) { Start-Module 'tpacq' @('--port', $Port, '--object', '1', '--station', '1', '--sensor', '1', '--archive', $Tds, '--slink', '127.0.0.1:18001') }
+        else           { Start-Module 'tpacq' @('--sim', '--rate', "$Rate", '--archive', $Tds, '--slink', '127.0.0.1:18001'); Write-Host "  (synthetic source; use -Port COM6 for the device)" -ForegroundColor DarkGray }
 
         # Second device (SM-3) = object 2, sensor 2 — matches the SM-3 entry in
         # config/inventory.example.json (Tower-A, basement, seismometer).
-        if ($Port2) { Start-Module 'tpacq' @('--port', $Port2, '--object', '2', '--station', '2', '--sensor', '2', '--archive', $Tds, '--slink', '127.0.0.1:18001') }
+        if (-not $NoAcq -and $Port2) { Start-Module 'tpacq' @('--port', $Port2, '--object', '2', '--station', '2', '--sensor', '2', '--archive', $Tds, '--slink', '127.0.0.1:18001') }
 
         # Console: analysis results over the broker (AppController), live waveforms
         # over the SeedLink backbone (--slink -> tpslinkserver serve port 18000).
