@@ -45,9 +45,11 @@ struct Qc {
 class QcApplication : public tp::client::Application {
 public:
     QcApplication(tp::client::ApplicationSettings settings, int periodMs, double spikeSigma,
-                  QString slinkHost = {}, quint16 slinkPort = 0, QString inventory = {})
+                  QString slinkHost = {}, quint16 slinkPort = 0, QString inventory = {},
+                  QStringList stations = {})
         : Application(std::move(settings)), m_periodMs(periodMs), m_spikeSigma(spikeSigma),
-          m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort), m_inventory(std::move(inventory)) {}
+          m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort), m_inventory(std::move(inventory)),
+          m_stations(std::move(stations)) {}
 
     bool init() override {
         if (!Application::init()) return false;
@@ -58,6 +60,7 @@ public:
         if (m_slinkPort) {
             m_wf = std::make_unique<tp::slink::WaveformClient>(m_slinkHost, m_slinkPort);
             if (!m_inventory.isEmpty()) m_wf->setStationMap(tp::loadStationMap(m_inventory));
+            if (!m_stations.isEmpty()) m_wf->setStations(m_stations);
             m_wf->onTriple([this](uint32_t sta, uint32_t obj, uint32_t sen,
                                   double x, double y, double z, int64_t t, double rate) {
                 feedTriple(sta, obj, sen, x, y, z, t, rate);
@@ -188,6 +191,7 @@ private:
     QString m_slinkHost;
     quint16 m_slinkPort = 0;
     QString m_inventory;
+    QStringList m_stations;                     // --stations: this instance's partition
     std::unique_ptr<tp::slink::WaveformClient> m_wf;
 };
 
@@ -213,7 +217,10 @@ int main(int argc, char* argv[]) {
     QCommandLineOption slinkOpt("slink", "Read waveforms from a SeedLink backbone host:port "
                                 "instead of the raw. bus (Level 2)", "host:port", "");
     QCommandLineOption invOpt("inventory", "Inventory JSON for FDSN station->object mapping", "file", "");
-    parser.addOptions({masterOpt, queueOpt, perOpt, slinkOpt, invOpt});
+    QCommandLineOption stationsOpt("stations", "With --slink: comma-separated station subset this "
+                                   "instance handles, e.g. \"1,2,3\". Empty = all. Run several tpqc, "
+                                   "one per partition.", "list", "");
+    parser.addOptions({masterOpt, queueOpt, perOpt, slinkOpt, invOpt, stationsOpt});
     parser.process(app);
 
     QString slinkHost; quint16 slinkPort = 0;
@@ -222,6 +229,9 @@ int main(int argc, char* argv[]) {
         slinkHost = colon > 0 ? sl.left(colon) : sl;
         slinkPort = quint16(colon > 0 ? sl.mid(colon + 1).toUInt() : 18000);
     }
+    QStringList stations;
+    for (const QString& s : parser.value(stationsOpt).split(',', Qt::SkipEmptyParts))
+        stations << s.trimmed();
 
     tp::client::ApplicationSettings settings;
     settings.moduleName = "tpqc";
@@ -233,6 +243,6 @@ int main(int argc, char* argv[]) {
     QcApplication qc(std::move(settings),
                      std::max(1000, parser.value(perOpt).toInt() * 1000),
                      cfg.number("qc.spikeSigma", 8.0),
-                     slinkHost, slinkPort, parser.value(invOpt));
+                     slinkHost, slinkPort, parser.value(invOpt), stations);
     return qc.exec();
 }

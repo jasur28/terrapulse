@@ -44,11 +44,11 @@ public:
     WfParamApplication(tp::client::ApplicationSettings settings, double windowSec, int periodMs,
                        std::vector<double> periods, double damping,
                        QString slinkHost = {}, quint16 slinkPort = 0, QString inventory = {},
-                       QString filterSpec = {})
+                       QString filterSpec = {}, QStringList stations = {})
         : Application(std::move(settings)), m_windowSec(windowSec), m_periodMs(periodMs),
           m_periods(std::move(periods)), m_damping(damping),
           m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort), m_inventory(std::move(inventory)),
-          m_filterSpec(std::move(filterSpec)) {}
+          m_filterSpec(std::move(filterSpec)), m_stations(std::move(stations)) {}
 
     bool init() override {
         if (!Application::init()) return false;
@@ -59,6 +59,7 @@ public:
         if (m_slinkPort) {
             m_wf = std::make_unique<tp::slink::WaveformClient>(m_slinkHost, m_slinkPort);
             if (!m_inventory.isEmpty()) m_wf->setStationMap(tp::loadStationMap(m_inventory));
+            if (!m_stations.isEmpty()) m_wf->setStations(m_stations);
             m_wf->onTriple([this](uint32_t sta, uint32_t obj, uint32_t sen,
                                   double x, double y, double z, int64_t t, double rate) {
                 feedTriple(sta, obj, sen, x, y, z, t, rate);
@@ -214,6 +215,7 @@ private:
     QString m_slinkHost;
     quint16 m_slinkPort = 0;
     QString m_inventory;
+    QStringList m_stations;                     // --stations: this instance's partition
     std::unique_ptr<tp::slink::WaveformClient> m_wf;
 
     QString m_filterSpec;
@@ -250,7 +252,10 @@ int main(int argc, char* argv[]) {
     QCommandLineOption filterOpt("filter", "Filter chain before strong-motion analysis, e.g. "
                                  "\"hp:0.1,lp:25\" (high-pass removes drift before PGV integration)",
                                  "spec", cfg.str("wfparam.filter", ""));
-    parser.addOptions({masterOpt, queueOpt, winOpt, perOpt, slinkOpt, invOpt, filterOpt});
+    QCommandLineOption stationsOpt("stations", "With --slink: comma-separated station subset this "
+                                   "instance handles, e.g. \"1,2,3\". Empty = all. Run several "
+                                   "tpwfparam, one per partition.", "list", "");
+    parser.addOptions({masterOpt, queueOpt, winOpt, perOpt, slinkOpt, invOpt, filterOpt, stationsOpt});
     parser.process(app);
 
     QString slinkHost; quint16 slinkPort = 0;
@@ -259,6 +264,9 @@ int main(int argc, char* argv[]) {
         slinkHost = colon > 0 ? sl.left(colon) : sl;
         slinkPort = quint16(colon > 0 ? sl.mid(colon + 1).toUInt() : 18000);
     }
+    QStringList stations;
+    for (const QString& s : parser.value(stationsOpt).split(',', Qt::SkipEmptyParts))
+        stations << s.trimmed();
 
     // Response-spectrum periods and damping come from configuration so an
     // engineer can match them to the monitored structures' natural periods.
@@ -283,6 +291,6 @@ int main(int argc, char* argv[]) {
                           qMax(500, parser.value(perOpt).toInt() * 1000),
                           std::move(periods),
                           cfg.number("wfparam.damping", 0.05),
-                          slinkHost, slinkPort, parser.value(invOpt), parser.value(filterOpt));
+                          slinkHost, slinkPort, parser.value(invOpt), parser.value(filterOpt), stations);
     return wf.exec();
 }

@@ -39,11 +39,11 @@ public:
     ProcApplication(tp::client::ApplicationSettings settings,
                     const tp::AnalysisThresholds& thresholds, tp::Config cfg,
                     int window, int freqWindow, QString slinkHost = {}, quint16 slinkPort = 0,
-                    QString inventory = {}, QString filterSpec = {})
+                    QString inventory = {}, QString filterSpec = {}, QStringList stations = {})
         : Application(std::move(settings)), m_thresholds(thresholds),
           m_cfg(std::move(cfg)), m_window(window), m_freqWindow(freqWindow),
           m_slinkHost(std::move(slinkHost)), m_slinkPort(slinkPort), m_inventory(std::move(inventory)),
-          m_filterSpec(std::move(filterSpec)) {}
+          m_filterSpec(std::move(filterSpec)), m_stations(std::move(stations)) {}
 
     bool init() override {
         if (!Application::init()) return false;
@@ -75,6 +75,7 @@ public:
         if (m_slinkPort) {
             m_wf = std::make_unique<tp::slink::WaveformClient>(m_slinkHost, m_slinkPort);
             if (!m_inventory.isEmpty()) m_wf->setStationMap(tp::loadStationMap(m_inventory));
+            if (!m_stations.isEmpty()) m_wf->setStations(m_stations);
             m_wf->onTriple([this](uint32_t sta, uint32_t obj, uint32_t sen,
                                   double x, double y, double z, int64_t t, double rate) {
                 feedTriple(sta, obj, sen, x, y, z, t, quint32(rate));
@@ -82,10 +83,11 @@ public:
             m_wf->start();
         }
 
-        std::printf("[tpproc] waveforms <- %s   saf/shf -> broker   window=%d\n",
+        std::printf("[tpproc] waveforms <- %s   saf/shf -> broker   window=%d   stations=%s\n",
                     m_slinkPort ? (m_slinkHost + ":" + QString::number(m_slinkPort)).toUtf8().constData()
                                 : messagingUrl().toUtf8().constData(),
-                    m_pipe.windowSize());
+                    m_pipe.windowSize(),
+                    m_stations.isEmpty() ? "all" : m_stations.join(',').toUtf8().constData());
         std::fflush(stdout);
         return true;
     }
@@ -199,6 +201,7 @@ private:
     QString m_slinkHost;
     quint16 m_slinkPort = 0;
     QString m_inventory;
+    QStringList m_stations;                     // --stations: this instance's partition
     std::unique_ptr<tp::slink::WaveformClient> m_wf;
 
     QString m_filterSpec;                       // --filter "hp:0.3,lp:20"
@@ -239,8 +242,17 @@ int main(int argc, char* argv[]) {
     QCommandLineOption filterOpt("filter", "Filter chain applied before analysis, e.g. "
                                  "\"hp:0.3,lp:20\" (high-pass 0.3 Hz, low-pass 20 Hz). Empty = none.",
                                  "spec", cfg.str("proc.filter", ""));
-    parser.addOptions({masterOpt, queueOpt, winOpt, freqWinOpt, slinkOpt, invOpt, filterOpt});
+    QCommandLineOption stationsOpt("stations", "With --slink: comma-separated station subset this "
+                                   "instance processes, e.g. \"1,2,3\" or \"TP.BRDG1,TP.TOWR2\". "
+                                   "Empty = all stations. Run several tpproc, one per partition.",
+                                   "list", "");
+    parser.addOptions({masterOpt, queueOpt, winOpt, freqWinOpt, slinkOpt, invOpt, filterOpt, stationsOpt});
     parser.process(app);
+
+    // Partition: which stations this instance handles (only meaningful with --slink).
+    QStringList stations;
+    for (const QString& s : parser.value(stationsOpt).split(',', Qt::SkipEmptyParts))
+        stations << s.trimmed();
 
     QString slinkHost; quint16 slinkPort = 0;
     if (const QString sl = parser.value(slinkOpt); !sl.isEmpty()) {
@@ -277,6 +289,6 @@ int main(int argc, char* argv[]) {
     ProcApplication proc(std::move(settings), th, cfg,
                          parser.value(winOpt).toInt(),
                          parser.value(freqWinOpt).toInt(),
-                         slinkHost, slinkPort, parser.value(invOpt), parser.value(filterOpt));
+                         slinkHost, slinkPort, parser.value(invOpt), parser.value(filterOpt), stations);
     return proc.exec();
 }

@@ -35,7 +35,17 @@ void WaveformClient::connectAndHandshake() {
         return m_sock.readAll();
     };
     cmd("HELLO");
-    // No STATION: the server streams every channel (all sensors) on this link.
+    // Station selection (multi-station SeedLink): register each requested station
+    // before DATA so several consumers can split the network. No STATION at all =
+    // the server streams every channel (uni-station), the default.
+    for (const QString& spec : m_stations) {
+        QString net = QStringLiteral("TP"), sta = spec.trimmed();
+        int sep = sta.indexOf('_');
+        if (sep < 0) sep = sta.indexOf('.');
+        if (sep >= 0) { net = sta.left(sep); sta = sta.mid(sep + 1); }
+        if (sta.isEmpty()) continue;
+        cmd(("STATION " + sta + " " + net).toLatin1());
+    }
     QByteArray dataCmd = "DATA";
     if (m_haveSeq) {
         const quint32 next = (m_lastSeq + 1) & 0xFFFFFF;

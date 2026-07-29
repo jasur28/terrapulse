@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 #include <QTcpSocket>
 #include <QTimer>
 
@@ -37,6 +38,10 @@ public:
     // numeric object (sensor is the numeric location). Legacy numeric ids need
     // no map. See tp::loadStationMap.
     void setStationMap(std::unordered_map<std::string, uint32_t> m) { m_stationMap = std::move(m); }
+    // Subscribe to a subset of stations (multi-station SeedLink), so several
+    // consumers can split the network between them. Each spec is "STA" (network
+    // defaults to TP) or "NET.STA" / "NET_STA". Empty = all channels (uni-station).
+    void setStations(const QStringList& stations) { m_stations = stations; }
     void start();                       // connect + handshake + auto-reconnect
     quint64 records()    const { return m_records; }
     quint64 unresolved() const { return m_unresolved; }   // records dropped: id not resolvable
@@ -56,6 +61,7 @@ private:
     QByteArray m_buf;
     TripleFn   m_onTriple;
     std::unordered_map<std::string, uint32_t> m_stationMap;
+    QStringList m_stations;                 // multi-station subset (empty = all)
     double     m_lastRate = 200.0;
     quint32    m_lastSeq = 0;
     bool       m_haveSeq = false;
