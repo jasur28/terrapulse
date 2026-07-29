@@ -22,6 +22,7 @@ import importlib.util
 import json
 import os
 import platform
+import shutil
 import signal
 import subprocess
 import sys
@@ -320,6 +321,54 @@ def command_check(root, modules):
     return 1 if errors else 0
 
 
+# OS packages per category (Debian/Ubuntu names). "base" is enough for a headless
+# acquisition/processing node (TP_BUILD_GUI=OFF); "gui" adds the QML console deps.
+DEP_PACKAGES = {
+    "base": ["git", "cmake", "ninja-build", "g++",
+             "qt6-base-dev", "qt6-serialport-dev", "libqt6sql6-sqlite"],
+    "gui": ["qt6-declarative-dev", "qt6-charts-dev", "libgl1-mesa-dev"],
+    "service": [],   # systemd ships with the OS; nothing extra to install
+}
+
+
+def command_install_deps(root, categories, run):
+    cats = categories or ["base"]
+    pkgs = []
+    for c in cats:
+        if c not in DEP_PACKAGES:
+            print(f"unknown category '{c}' (have: {', '.join(DEP_PACKAGES)})")
+            return 1
+        pkgs += DEP_PACKAGES[c]
+    pkgs = sorted(set(pkgs))
+
+    if IS_WIN:
+        print("On Windows dependencies come from the Qt online installer (Qt 6.x MinGW):")
+        mods = "Core, Gui, Network, SerialPort, Sql"
+        if "gui" in cats:
+            mods += ", Quick, QuickControls2, Charts"
+        print(f"  Qt modules: {mods}")
+        print("  Build tools: CMake + Ninja (bundled with Qt) and the MinGW toolchain.")
+        return 0
+
+    if not pkgs:
+        print(f"category '{', '.join(cats)}': nothing to install (uses system components).")
+        return 0
+    if shutil.which("apt-get"):
+        cmd = ["sudo", "apt-get", "install", "-y"] + pkgs
+    elif shutil.which("dnf"):
+        cmd = ["sudo", "dnf", "install", "-y"] + pkgs   # package names differ on Fedora
+    else:
+        print("no apt-get/dnf found - install these packages manually:")
+        print("  " + " ".join(pkgs))
+        return 0
+
+    print(" ".join(cmd))
+    if run:
+        return subprocess.call(cmd)
+    print("\n(dry run - add --run to execute)")
+    return 0
+
+
 def command_printenv(root, modules):
     layout = "source-tree" if (root / "etc" / "modules.json").exists() else \
              ("installed" if (root / "etc" / "terrapulse" / "modules.json").exists() else "unknown")
@@ -451,6 +500,9 @@ def main(argv):
     sub.add_parser("check")
     sub.add_parser("update-config")
     sub.add_parser("print-env")
+    p = sub.add_parser("install-deps")
+    p.add_argument("categories", nargs="*")     # base | gui | service
+    p.add_argument("--run", action="store_true")
     sub.add_parser("status")
     p = sub.add_parser("setup")
     p.add_argument("--role", required=True)
@@ -487,6 +539,8 @@ def main(argv):
         return command_update_config(root, modules)
     elif ns.command == "print-env":
         return command_printenv(root, modules)
+    elif ns.command == "install-deps":
+        return command_install_deps(root, ns.categories, ns.run)
     elif ns.command == "status":
         command_status(root, modules)
     elif ns.command == "setup":
