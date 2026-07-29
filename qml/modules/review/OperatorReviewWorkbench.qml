@@ -37,6 +37,9 @@ Item {
         return e ? new Date(e.time).toLocaleString(Qt.locale(), "yyyy-MM-dd hh:mm:ss") : "-"
     }
 
+    // Which sensors detected this structural event, their trigger time and the
+    // strong motion they saw. Accelerometer domain — sensor detections, not
+    // seismic P/S phase arrivals.
     function rebuildArrivals() {
         var e = selectedEvent || events[0]
         if (!e) {
@@ -44,20 +47,24 @@ Item {
             return
         }
         var out = []
-        var names = ["PB02", "PB03", "PB05", "PB06", "PB08", "PB09", "PB11", "PB12", "PB14", "PB19"]
+        var names = ["Bridge-A", "Tower-2", "Dam-3", "Tunnel-4", "Bldg-5", "Bridge-6", "Tower-7", "Dam-8"]
+        var axis = ["X", "Y", "Z"]
         for (var i = 0; i < names.length; i++) {
-            var dist = 0.35 + i * 0.18 + (e.objectId || 0) * 0.03
+            var dist = 12 + i * 9 + (e.objectId || 0) * 2          // metres from the event
             out.push({
-                used: true,
-                status: i % 3 === 0 ? "A<A>" : "A<L>",
-                phase: i % 2 === 0 ? "P" : "S",
+                used: i < 6,
+                status: i % 3 === 0 ? "trigger" : "auto",
+                phase: axis[i % 3],                                // dominant axis
                 net: "TP",
                 sta: names[i],
-                loccha: i % 2 === 0 ? "HHZ" : "HHN",
-                timeres: ((i % 5) - 2) * 0.11,
+                loccha: "01/HN" + axis[i % 3],
+                timeres: ((i % 5) - 2) * 0.04,                     // onset residual (s)
                 dis: dist,
                 az: (42 + i * 31) % 360,
-                time: new Date(e.time + 1200 + i * 850).toLocaleTimeString(Qt.locale(), "hh:mm:ss.zzz")
+                pga: Math.max(0.02, 0.30 - i * 0.03),              // gal
+                pgv: Math.max(0.1, 1.9 - i * 0.18),                // cm/s
+                snr: Math.max(1.2, 9.0 - i * 0.7),
+                time: new Date(e.time + 200 + i * 420).toLocaleTimeString(Qt.locale(), "hh:mm:ss.zzz")
             })
         }
         arrivals = out
@@ -245,10 +252,10 @@ Item {
                                     "Depth:", selectedEvent.depth.toFixed(1) + " m",
                                     "Lat:", selectedEvent.lat.toFixed(4),
                                     "Lon:", selectedEvent.lon.toFixed(4),
-                                    "Phases:", selectedEvent.phases + " / " + selectedEvent.phases,
-                                    "RMS Res.:", selectedEvent.rms.toFixed(2),
-                                    "Az. Gap:", selectedEvent.gap + " deg",
-                                    "Min. Dist.:", selectedEvent.minDist.toFixed(3) + " km",
+                                    "Sensors:", "" + selectedEvent.phases,
+                                    "Detection RMS:", selectedEvent.rms.toFixed(2),
+                                    "Sensor gap:", selectedEvent.gap + " °",
+                                    "Nearest:", (selectedEvent.minDist * 1000).toFixed(0) + " m",
                                     "EventID:", selectedEvent.id,
                                     "Agency:", selectedEvent.agency,
                                     "Author:", selectedEvent.author,
@@ -284,8 +291,8 @@ Item {
                                     currentIndex: 2
                                     TabButton { text: "Distance" }
                                     TabButton { text: "Azimuth" }
-                                    TabButton { text: "TravelTime" }
-                                    TabButton { text: "MoveOut" }
+                                    TabButton { text: "Onset" }
+                                    TabButton { text: "Amplitude" }
                                     TabButton { text: "Polar" }
                                 }
 
@@ -350,8 +357,8 @@ Item {
                     TextField { Layout.preferredWidth: 150; text: selectedEvent ? selectedEvent.depth.toFixed(1) : "0"; enabled: false }
                     Text { text: "m"; color: "#202020"; font.pixelSize: 12 }
                     CheckBox { text: "Distance cutoff" }
-                    TextField { Layout.preferredWidth: 90; text: "1000"; enabled: false }
-                    Text { text: "km"; color: "#202020"; font.pixelSize: 12 }
+                    TextField { Layout.preferredWidth: 90; text: "500"; enabled: false }
+                    Text { text: "m"; color: "#202020"; font.pixelSize: 12 }
                     CheckBox { text: "Ignore initial location" }
                     Item { Layout.fillWidth: true }
                     ClassicToolButton { text: "\u2630" }
@@ -414,25 +421,21 @@ Item {
             for (var x = 0; x <= 5; x++) {
                 var gx = left + x * pw / 5
                 ctx.beginPath(); ctx.moveTo(gx, top); ctx.lineTo(gx, top + ph); ctx.stroke()
-                ctx.fillText((x * 0.5).toFixed(1), gx, top + ph + 18)
+                ctx.fillText((x * 16).toFixed(0), gx, top + ph + 18)
             }
 
             for (var i = 0; i < arrivals.length; i++) {
                 var a = arrivals[i]
-                var px = left + Math.min(1, a.dis / 2.5) * pw
+                var px = left + Math.min(1, a.dis / 80) * pw
                 var py = top + (1 - ((a.timeres + 1) / 2)) * ph
-                ctx.fillStyle = a.phase === "P" ? "#9d0000" : "#b00000"
-                if (a.phase === "P") {
-                    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fill()
-                } else {
-                    ctx.fillRect(px - 4, py - 4, 8, 8)
-                }
+                ctx.fillStyle = a.phase === "X" ? Theme.seriesX : a.phase === "Y" ? Theme.seriesY : Theme.seriesZ
+                ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fill()
             }
 
             ctx.strokeStyle = "#202020"
             ctx.strokeRect(left, top, pw, ph)
             ctx.fillStyle = "#202020"
-            ctx.fillText("Distance (km)", left + pw / 2, height - 6)
+            ctx.fillText("Distance (m)", left + pw / 2, height - 6)
         }
     }
 
@@ -453,7 +456,7 @@ Item {
                 Row {
                     anchors.fill: parent
                     Repeater {
-                        model: ["Used", "Status", "Phase", "Net", "Sta", "Loc/Cha", "Timeres (s)", "Dis (km)", "Az", "Time (UTC)", "+/- (s)"]
+                        model: ["Used", "Status", "Sensor", "Cha", "Trigger (UTC)", "PGA gal", "PGV", "SNR", "Dist m", "Resid s", "Axis"]
                         Text {
                             width: parent.width / 11
                             height: parent.height
@@ -480,7 +483,7 @@ Item {
                     border.color: "#c8c8c8"
                     Row {
                         anchors.fill: parent
-                        property var cells: [modelData.used ? "\u2611 T  -" : "\u2610 -  -", modelData.status, modelData.phase, modelData.net, modelData.sta, modelData.loccha, modelData.timeres.toFixed(2), modelData.dis.toFixed(3), modelData.az, modelData.time, ""]
+                        property var cells: [modelData.used ? "\u2611" : "\u2610", modelData.status, modelData.sta, modelData.loccha, modelData.time, modelData.pga.toFixed(3), modelData.pgv.toFixed(2), modelData.snr.toFixed(1), modelData.dis.toFixed(0), modelData.timeres.toFixed(2), modelData.phase]
                         Repeater {
                             model: parent.cells
                             Text {
@@ -574,8 +577,8 @@ Item {
                             "Depth:", selectedEvent.depth.toFixed(1) + " m",
                             "Latitude:", selectedEvent.lat.toFixed(4),
                             "Longitude:", selectedEvent.lon.toFixed(4),
-                            "Phase Count:", selectedEvent.phases,
-                            "RMS Residual:", selectedEvent.rms.toFixed(2),
+                            "Sensors:", selectedEvent.phases,
+                            "Detection RMS:", selectedEvent.rms.toFixed(2),
                             "Agency:", selectedEvent.agency,
                             "Origin Status:", selectedEvent.status
                         ] : []
@@ -623,7 +626,7 @@ Item {
                 Row {
                     anchors.fill: parent
                     Repeater {
-                        model: ["Created (UTC)", "OT", "Phases", "Lat", "Lon", "Depth", "RMS", "Stat", "Method", "Agency"]
+                        model: ["Created (UTC)", "OT", "Sensors", "Lat", "Lon", "Depth", "RMS", "Stat", "Method", "Agency"]
                         Text {
                             width: parent.width / 10
                             height: parent.height
@@ -692,7 +695,7 @@ Item {
 
             ctx.fillStyle = "#202020"
             ctx.font = "bold 12px sans-serif"
-            ctx.fillText(selectedEvent ? ("PB02  TP  HHZ, distance: " + selectedEvent.minDist.toFixed(3) + " km") : "No selected event", 8, 18)
+            ctx.fillText(selectedEvent ? ("Sensor detections · nearest " + (selectedEvent.minDist * 1000).toFixed(0) + " m") : "No selected event", 8, 18)
 
             for (var i = 0; i < visibleRows; i++) {
                 var a = arrivals[i % Math.max(1, arrivals.length)] || { sta: "PB" + i, net: "TP", loccha: "HHZ", timeres: 0, phase: "P" }
@@ -716,7 +719,7 @@ Item {
                 var arrivalX = left + plotW * (0.28 + (i % 7) * 0.035)
                 ctx.strokeStyle = "#ff0000"
                 ctx.beginPath(); ctx.moveTo(pickX, y0); ctx.lineTo(pickX, y0 + rowH); ctx.stroke()
-                ctx.fillStyle = "#ff0000"; ctx.fillText("P", pickX + 3, y0 + 15)
+                ctx.fillStyle = "#ff0000"; ctx.fillText("T", pickX + 3, y0 + 15)
                 ctx.strokeStyle = "#0048ff"
                 ctx.beginPath(); ctx.moveTo(arrivalX, y0); ctx.lineTo(arrivalX, y0 + rowH); ctx.stroke()
                 ctx.fillStyle = "#0048ff"; ctx.fillText(a.phase, arrivalX + 3, y0 + 28)
