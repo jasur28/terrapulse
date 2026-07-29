@@ -446,6 +446,51 @@ def command_install_deps(root, categories, run):
     return 0
 
 
+def command_systemd(root, install):
+    """Generate a systemd unit that runs this node's role at boot (like SeisComp's
+    init integration). `terrapulse start` launches the enabled daemons and returns;
+    ExecStop stops them by pidfile."""
+    role = load_enabled(root).get("role") or "standalone"
+    py = sys.executable
+    cmd = str(Path(__file__).resolve())
+    qtlib = os.environ.get("TP_QT_LIB", "")
+    ld = (f"Environment=LD_LIBRARY_PATH={qtlib}" if qtlib else
+          "# Environment=LD_LIBRARY_PATH=/path/to/qt/lib   # add if Qt is not on the system path")
+    unit = (
+        "[Unit]\n"
+        f"Description=TerraPulse ({role} node)\n"
+        "After=network-online.target\n"
+        "Wants=network-online.target\n\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        "RemainAfterExit=yes\n"
+        f"Environment=TP_ROOT={root}\n"
+        f"{ld}\n"
+        f"ExecStart={py} {cmd} start\n"
+        f"ExecStop={py} {cmd} stop\n\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+    )
+    if IS_WIN:
+        print("systemd is Linux-only. Generated unit for reference:\n")
+        print(unit)
+        return 0
+    if install:
+        dest = "/etc/systemd/system/terrapulse.service"
+        try:
+            subprocess.run(["sudo", "tee", dest], input=unit, text=True,
+                           check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
+        except Exception as exc:
+            print(f"install failed: {exc}")
+            return 1
+        print(f"installed {dest}\nenable at boot: sudo systemctl enable --now terrapulse")
+        return 0
+    print(unit)
+    print("# install: terrapulse systemd --install  (writes /etc/systemd/system/terrapulse.service)")
+    return 0
+
+
 def command_printenv(root, modules):
     layout = "source-tree" if (root / "etc" / "modules.json").exists() else \
              ("installed" if (root / "etc" / "terrapulse" / "modules.json").exists() else "unknown")
@@ -578,6 +623,8 @@ def main(argv):
     sub.add_parser("check")
     sub.add_parser("update-config")
     sub.add_parser("print-env")
+    p = sub.add_parser("systemd")
+    p.add_argument("--install", action="store_true")
     p = sub.add_parser("install-deps")
     p.add_argument("categories", nargs="*")     # base | gui | service
     p.add_argument("--run", action="store_true")
@@ -624,6 +671,8 @@ def main(argv):
         return command_update_config(root, modules)
     elif ns.command == "print-env":
         return command_printenv(root, modules)
+    elif ns.command == "systemd":
+        return command_systemd(root, ns.install)
     elif ns.command == "install-deps":
         return command_install_deps(root, ns.categories, ns.run)
     elif ns.command == "status":
