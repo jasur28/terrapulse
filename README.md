@@ -69,22 +69,28 @@ built automatically by CMake.
 
 ## Run
 
-One command starts the whole suite (adjust Qt paths at the top of the script if
-needed):
+One management command runs the whole suite, like SeisComp's `seiscomp`. A
+machine's *role* selects which modules run (`bin/terrapulse.ps1` is a Windows shim
+over the cross-platform `bin/terrapulse`; adjust Qt paths at the top if needed):
 
 ```powershell
-# synthetic source (no hardware):
-.\bin\terrapulse.ps1 start
-
-# real accelerometer on a COM port:
-.\bin\terrapulse.ps1 start -Port COM6
+# one machine, synthetic source (demo / development):
+.\bin\terrapulse.ps1 setup --role standalone
+.\bin\terrapulse.ps1 start                  # bring up the enabled daemons
+.\bin\terrapulse.ps1 exec tprttv            # run a GUI view
 
 .\bin\terrapulse.ps1 status     # what is running
 .\bin\terrapulse.ps1 stop       # stop everything
+
+# real accelerometer on a COM port:
+.\bin\terrapulse.ps1 setup --role standalone --source COM6
 ```
 
-This launches `tpmaster` (+ inventory), `tpproc`, `tpacq`, and the console.
-Backend logs go to `var/logs/`.
+Roles: `standalone / acquisition / center / processor / playback / gui`. A field
+acquisition node runs its own SeedLink backbone and the centre pulls from it
+(SeisComp3 model): `setup --role acquisition --source COM6` on the node,
+`setup --role center --backbone-host <node-ip>` at the centre. Backend logs go to
+`var/logs/`.
 
 <details>
 <summary>Manual start (one process per terminal)</summary>
