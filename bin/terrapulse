@@ -76,6 +76,37 @@ def load_modules(root):
     return load_json(etc_dir(root) / "modules.json", {}).get("modules", [])
 
 
+def aliases_path(root):
+    return etc_dir(root) / "aliases.json"
+
+
+def load_aliases(root):
+    return load_json(aliases_path(root), {"aliases": {}}).get("aliases", {})
+
+
+def save_aliases(root, aliases):
+    with aliases_path(root).open("w", encoding="utf-8") as f:
+        json.dump({"aliases": aliases}, f, indent=2)
+        f.write("\n")
+
+
+def all_modules(root):
+    """The catalogue plus per-machine aliases (multi-instance): each alias is a base
+    module run under its own name with its own parameters (SeisComp `alias create`)."""
+    mods = list(load_modules(root))
+    reg = {m["name"]: m for m in mods}
+    for name, a in load_aliases(root).items():
+        base = reg.get(a.get("module"))
+        if not base:
+            continue
+        mods.append({
+            "name": name, "category": "alias", "daemon": True,
+            "order": base.get("order", 100), "base": a["module"],
+            "params": a.get("params", {}), "description": f"alias of {a['module']}",
+        })
+    return mods
+
+
 def load_roles(root):
     return load_json(etc_dir(root) / "roles.json", {}).get("roles", {})
 
@@ -179,13 +210,22 @@ def load_init(root, name):
     return cls() if cls else None
 
 
-def module_args(root, env, name):
-    init = load_init(root, name)
+def env_for(root, module):
+    """Env for one module: role params, with the module's own (alias) params on top."""
+    enabled = load_enabled(root)
+    params = dict(enabled.get("params", {}))
+    params.update(module.get("params", {}))
+    return Env(root, state_dir(root), load_config(root), enabled.get("role"), params)
+
+
+def module_args(root, module):
+    base = module.get("base", module["name"])       # an alias runs its base module
+    init = load_init(root, base)
     if init is not None and hasattr(init, "start_args"):
         try:
-            return [str(a) for a in (init.start_args(env) or [])]
+            return [str(a) for a in (init.start_args(env_for(root, module)) or [])]
         except Exception as exc:
-            print(f"! {name}: start_args failed: {exc}")
+            print(f"! {module['name']}: start_args failed: {exc}")
     return []
 
 
@@ -310,10 +350,47 @@ def command_toggle(root, names, on):
     print(("enabled: " if on else "disabled: ") + ", ".join(names))
 
 
+def command_alias(root, ns):
+    """Multi-instance: run a module under its own name with its own parameters, so
+    a node can carry many sources/partitions (SeisComp `alias create`)."""
+    aliases = load_aliases(root)
+    if ns.action == "list":
+        if not aliases:
+            print("no aliases")
+        for name, a in aliases.items():
+            print(f"{name:<18} -> {a['module']:<12} {a.get('params', {})}")
+        return 0
+    if ns.action == "remove":
+        if aliases.pop(ns.name, None) is not None:
+            save_aliases(root, aliases)
+            st = load_enabled(root)
+            st["enabled"] = [n for n in st.get("enabled", []) if n != ns.name]
+            save_enabled(root, st)
+            print(f"removed alias {ns.name}")
+        else:
+            print(f"no such alias: {ns.name}")
+        return 0
+    # create
+    if not ns.name or not ns.module:
+        raise SystemExit("usage: terrapulse alias create <name> <module> [--object N --source COM6 --stations 1,2 ...]")
+    if ns.module not in {m["name"] for m in load_modules(root)}:
+        raise SystemExit(f"unknown base module '{ns.module}'")
+    params = {k: v for k, v in {
+        "object": ns.object, "station": ns.station, "sensor": ns.sensor,
+        "source": ns.source, "stations": ns.stations, "backbone_host": ns.backbone_host,
+        "rate": ns.rate, "queue": ns.queue,
+    }.items() if v is not None}
+    aliases[ns.name] = {"module": ns.module, "params": params}
+    save_aliases(root, aliases)
+    print(f"alias {ns.name} -> {ns.module}  {params}")
+    print(f"enable it: terrapulse enable {ns.name}")
+    return 0
+
+
 def command_check(root, modules):
     errors = 0
     for m in enabled_daemons(root, modules) or daemon_modules(modules):
-        exe = bin_path(root, m["name"])
+        exe = bin_path(root, m.get("base", m["name"]))
         if not exe.exists():
             print(f"! {m['name']}: executable not found: {exe}")
             errors += 1
@@ -420,11 +497,12 @@ def command_update_config(root, modules):
                     print(f"    {mod} (module config)")
 
     for m in enabled_daemons(root, modules):
-        if not bin_path(root, m["name"]).exists():
+        base = m.get("base", m["name"])
+        if not bin_path(root, base).exists():
             print(f"! {m['name']}: executable not found")
             problems += 1
-        elif not (etc_dir(root) / "defaults" / f"{m['name']}.cfg").exists():
-            print(f"  {m['name']}: no shipped defaults (etc/defaults/{m['name']}.cfg)")
+        elif not (etc_dir(root) / "defaults" / f"{base}.cfg").exists():
+            print(f"  {m['name']}: no shipped defaults (etc/defaults/{base}.cfg)")
 
     print(f"\n{'OK - no problems.' if problems == 0 else str(problems) + ' problem(s) found.'}")
     return 1 if problems else 0
@@ -446,7 +524,7 @@ def command_status(root, modules):
         print(f"{m['name']:<13} {run}")
 
 
-def start_one(root, env, module):
+def start_one(root, module):
     name = module["name"]
     if not module.get("daemon"):
         print(f"{name}: GUI module - use `terrapulse exec {name}`")
@@ -455,11 +533,11 @@ def start_one(root, env, module):
     if is_running(pid):
         print(f"{name}: already running pid={pid}")
         return
-    exe = bin_path(root, name)
+    exe = bin_path(root, module.get("base", name))       # an alias runs its base exe
     if not exe.exists():
         print(f"{name}: executable not found: {exe}")
         return
-    args = module_args(root, env, name)
+    args = module_args(root, module)
     out = open(log_dir(root) / f"{name}.log", "ab")
     err = open(log_dir(root) / f"{name}.err", "ab")
     proc = subprocess.Popen([str(exe)] + args, cwd=str(root), stdout=out, stderr=err)
@@ -518,6 +596,13 @@ def main(argv):
     for verb in ("enable", "disable"):
         e = sub.add_parser(verb)
         e.add_argument("modules", nargs="+")
+    pa = sub.add_parser("alias")
+    pa.add_argument("action", choices=["create", "remove", "list"])
+    pa.add_argument("name", nargs="?")
+    pa.add_argument("module", nargs="?")
+    for opt in ("--object", "--station", "--sensor", "--source", "--stations", "--rate", "--queue"):
+        pa.add_argument(opt)
+    pa.add_argument("--backbone-host", dest="backbone_host")
     for name in ("start", "stop", "restart"):
         p = sub.add_parser(name)
         p.add_argument("modules", nargs="*")
@@ -527,7 +612,7 @@ def main(argv):
 
     ns = parser.parse_args(argv)
     root = root_dir()
-    modules = load_modules(root)
+    modules = all_modules(root)
 
     if ns.command == "list":
         command_list(root, modules)
@@ -552,20 +637,20 @@ def main(argv):
         command_setup(root, ns.role, overrides)
     elif ns.command in ("enable", "disable"):
         command_toggle(root, ns.modules, ns.command == "enable")
+    elif ns.command == "alias":
+        return command_alias(root, ns)
     elif ns.command == "start":
-        env = make_env(root)
         for m in select_modules(root, modules, ns.modules):
-            start_one(root, env, m)
+            start_one(root, m)
     elif ns.command == "stop":
         for m in select_modules(root, modules, ns.modules):
             stop_one(root, m)
     elif ns.command == "restart":
-        env = make_env(root)
         selected = select_modules(root, modules, ns.modules)
         for m in selected:
             stop_one(root, m)
         for m in selected:
-            start_one(root, env, m)
+            start_one(root, m)
     elif ns.command == "exec":
         exec_one(root, ns.module, ns.args)
     return 0
