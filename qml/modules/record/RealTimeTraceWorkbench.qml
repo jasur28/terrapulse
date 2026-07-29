@@ -44,9 +44,9 @@ Item {
                 var lsta = String(ls.station !== undefined ? ls.station : ls.object)
                 var lsen = String(ls.sensor !== undefined ? ls.sensor : 1)
                 var lnet = ls.network !== undefined ? String(ls.network) : "TP"
-                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HHE", component: "x", enabled: true, color: root.traceGray })
-                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HHN", component: "y", enabled: true, color: root.traceGreen })
-                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HHZ", component: "z", enabled: true, color: root.traceBlue })
+                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HNX", component: "x", enabled: true, color: Theme.seriesX })
+                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HNY", component: "y", enabled: true, color: Theme.seriesY })
+                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HNZ", component: "z", enabled: true, color: Theme.seriesZ })
             }
             return rows.filter(function(r) { return root.activeTab === 0 ? r.enabled : !r.enabled })
         }
@@ -57,18 +57,18 @@ Item {
             var sen = String(s.sensorId !== undefined ? s.sensorId : i + 1)
             var net = s.network !== undefined ? String(s.network) : "TP"
             var enabled = s.hasData !== false
-            rows.push({ station: sta, network: net, sensor: sen, channel: "HHE", component: "x", enabled: enabled, color: root.traceGray })
-            rows.push({ station: sta, network: net, sensor: sen, channel: "HHN", component: "y", enabled: enabled, color: root.traceGreen })
-            rows.push({ station: sta, network: net, sensor: sen, channel: "HHZ", component: "z", enabled: enabled, color: root.traceBlue })
+            rows.push({ station: sta, network: net, sensor: sen, channel: "HNX", component: "x", enabled: enabled, color: Theme.seriesX })
+            rows.push({ station: sta, network: net, sensor: sen, channel: "HNY", component: "y", enabled: enabled, color: Theme.seriesY })
+            rows.push({ station: sta, network: net, sensor: sen, channel: "HNZ", component: "z", enabled: enabled, color: Theme.seriesZ })
         }
         if (rows.length === 0) {
             rows = [
-                { station: "PB02", network: "TP", sensor: "01", channel: "HHZ", component: "z", enabled: true, color: root.traceYellow },
-                { station: "PB03", network: "TP", sensor: "01", channel: "HHZ", component: "z", enabled: true, color: root.traceGreen },
-                { station: "PB05", network: "TP", sensor: "01", channel: "HHZ", component: "z", enabled: true, color: root.traceGreen },
-                { station: "PB06", network: "TP", sensor: "01", channel: "HHZ", component: "z", enabled: true, color: root.traceGreen },
-                { station: "PB08", network: "TP", sensor: "01", channel: "HHZ", component: "z", enabled: true, color: root.traceBlue },
-                { station: "PB09", network: "TP", sensor: "01", channel: "HHZ", component: "z", enabled: true, color: root.traceBlue }
+                { station: "Bridge-A", network: "TP", sensor: "1", channel: "HNZ", component: "z", enabled: true, color: Theme.seriesZ },
+                { station: "Tower-2",  network: "TP", sensor: "1", channel: "HNZ", component: "z", enabled: true, color: Theme.seriesZ },
+                { station: "Dam-3",    network: "TP", sensor: "1", channel: "HNZ", component: "z", enabled: true, color: Theme.seriesZ },
+                { station: "Tunnel-4", network: "TP", sensor: "1", channel: "HNZ", component: "z", enabled: true, color: Theme.seriesZ },
+                { station: "Bldg-5",   network: "TP", sensor: "1", channel: "HNZ", component: "z", enabled: true, color: Theme.seriesZ },
+                { station: "Bridge-6", network: "TP", sensor: "1", channel: "HNZ", component: "z", enabled: true, color: Theme.seriesZ }
             ]
         }
         return rows.filter(function(r) { return root.activeTab === 0 ? r.enabled : !r.enabled })
@@ -76,6 +76,28 @@ Item {
 
     function rowKey(row) {
         return row.station + "." + row.sensor + "." + row.channel
+    }
+
+    // Structural-health status of an object (drives the left status strip): from
+    // the inventory warning level, not computed here — the UI only displays.
+    function healthColor(objId) {
+        var s = inventory.structures || []
+        for (var i = 0; i < s.length; i++)
+            if (Number(s[i].objectId) === Number(objId))
+                return Theme.statusColor(s[i].warning !== undefined ? s[i].warning : 0)
+        return Theme.colorNormal
+    }
+
+    // Short badge for a structural anomaly type (accelerometer domain — these are
+    // structural triggers, not seismic P/S phase picks).
+    function anomalyShort(typeName) {
+        var t = String(typeName || "").toLowerCase()
+        if (t.indexOf("reson") >= 0) return "R"
+        if (t.indexOf("crack") >= 0) return "C"
+        if (t.indexOf("settle") >= 0) return "S"
+        if (t.indexOf("overload") >= 0) return "O"
+        if (t.indexOf("vibr") >= 0) return "V"
+        return "!"
     }
 
     function ensureSeries(key) {
@@ -128,14 +150,24 @@ Item {
 
             var sta = String(sample.object !== undefined ? sample.object : sample.station)
             var sen = String(sample.sensor !== undefined ? sample.sensor : 1)
-            appendPoint(sta + "." + sen + ".HHE", root.latestRelT, sample.x || 0)
-            appendPoint(sta + "." + sen + ".HHN", root.latestRelT, sample.y || 0)
-            appendPoint(sta + "." + sen + ".HHZ", root.latestRelT, sample.z || 0)
+            appendPoint(sta + "." + sen + ".HNX", root.latestRelT, sample.x || 0)
+            appendPoint(sta + "." + sen + ".HNY", root.latestRelT, sample.y || 0)
+            appendPoint(sta + "." + sen + ".HNZ", root.latestRelT, sample.z || 0)
+            root.dirty = true
+        }
+    }
 
-            var abs = Math.max(Math.abs(sample.x || 0), Math.abs(sample.y || 0), Math.abs(sample.z || 0))
-            if (abs > 0 && root.picks.length < 1 || (abs > 80 && root.latestRelT - root.picks[root.picks.length - 1].t > 8)) {
-                addPick(root.latestRelT, abs > 120 ? "S" : "P", abs > 120)
-            }
+    // Trigger markers come from the analysis modules (shf. anomalies over the bus),
+    // not from thresholds guessed in the UI. Placed on the trace time line by the
+    // anomaly's onset time; labelled by structural anomaly type.
+    Connections {
+        target: appController
+        function onShfReceived(shf) {
+            if (root.baseTime < 0) return
+            if (shf.anomalyStatus !== undefined && shf.anomalyStatus !== 0) return   // only onsets
+            var ts = (shf.anomalyStartTime || Date.now()) / 1000.0
+            addPick(ts - root.baseTime, anomalyShort(shf.anomalyTypeName),
+                    (shf.severity !== undefined ? shf.severity : 1) >= 2)
             root.dirty = true
         }
     }
@@ -221,7 +253,7 @@ Item {
                     var bottom = 64
                     var plotW = Math.max(1, width - left - right)
                     var plotH = Math.max(1, height - top - bottom)
-                    var rowH = Math.max(34, plotH / Math.max(1, rows.length))
+                    var rowH = Math.max(22, plotH / Math.max(1, rows.length))
                     var visibleRows = Math.min(rows.length, Math.floor(plotH / rowH))
                     var tEnd = Math.max(root.windowSecs, root.latestRelT + 1)
                     var tStart = Math.max(0, tEnd - root.windowSecs)
@@ -258,20 +290,16 @@ Item {
                         ctx.fillStyle = i % 2 === 0 ? "#ffffff" : "#eeeeee"
                         ctx.fillRect(0, y0, width, rowH)
 
+                        // Left status strip: structural health of the object.
+                        ctx.fillStyle = root.healthColor(row.station)
+                        ctx.fillRect(0, y0, 5, rowH)
+
                         ctx.strokeStyle = "#c7c7c7"
                         ctx.lineWidth = 1
                         ctx.beginPath()
                         ctx.moveTo(left, y0 + rowH)
                         ctx.lineTo(left + plotW, y0 + rowH)
                         ctx.stroke()
-
-                        ctx.fillStyle = "#111111"
-                        ctx.font = "bold 12px sans-serif"
-                        ctx.textAlign = "left"
-                        ctx.fillText(row.station, 14, mid)
-                        ctx.font = "12px sans-serif"
-                        ctx.fillText(row.network, 72, mid)
-                        ctx.fillText(row.channel, 116, mid)
 
                         var key = root.rowKey(row)
                         var series = root.liveSeries[key] || []
@@ -285,12 +313,22 @@ Item {
                             used++
                         }
                         var mean = used > 0 ? sum / used : 0
-                        var scale = rowH * 0.38 / Math.max(maxAbs, 1)
+                        var scale = rowH * 0.40 / Math.max(maxAbs, 1)
 
-                        ctx.fillStyle = "#202020"
-                        ctx.font = "11px sans-serif"
-                        ctx.fillText("amax: " + maxAbs.toExponential(4), left + 4, y0 + 13)
-                        ctx.fillText("mean: " + mean.toExponential(4), left + 4, y0 + 27)
+                        // Left column: stream / net / cha, and live amax (gal) right-aligned.
+                        ctx.fillStyle = "#111111"
+                        ctx.font = "bold 11px sans-serif"
+                        ctx.textAlign = "left"
+                        ctx.fillText(row.station, 11, mid)
+                        ctx.fillStyle = "#4f4f4f"
+                        ctx.font = "10px sans-serif"
+                        ctx.fillText(row.network, 84, mid)
+                        ctx.fillText(row.channel, 110, mid)
+                        ctx.fillStyle = "#6f6f75"
+                        ctx.font = "10px monospace"
+                        ctx.textAlign = "right"
+                        ctx.fillText(maxAbs.toExponential(1), left - 6, mid)
+                        ctx.textAlign = "left"
 
                         ctx.strokeStyle = row.color
                         ctx.lineWidth = 1
@@ -321,15 +359,17 @@ Item {
                         var pick = root.picks[pk]
                         if (pick.t < tStart || pick.t > tEnd) continue
                         var px = tx(pick.t)
-                        ctx.strokeStyle = pick.associated ? "#0074d9" : "#ff0000"
+                        var pc = pick.associated ? Theme.colorCritical : Theme.colorHigh
+                        ctx.strokeStyle = pc
                         ctx.lineWidth = pick.associated ? 2 : 1.5
                         ctx.beginPath()
                         ctx.moveTo(px, top)
                         ctx.lineTo(px, top + visibleRows * rowH)
                         ctx.stroke()
-                        ctx.fillStyle = "#ff0000"
-                        ctx.font = "11px sans-serif"
-                        ctx.fillText(pick.label, px + 3, top + 16 + (pk % 8) * 18)
+                        ctx.fillStyle = pc
+                        ctx.font = "bold 11px sans-serif"
+                        ctx.textAlign = "left"
+                        ctx.fillText(pick.label, px + 3, top + 14 + (pk % 8) * 16)
                     }
 
                     ctx.strokeStyle = "#ff2a2a"
@@ -505,7 +545,7 @@ Item {
 
                 ComboBox {
                     Layout.preferredWidth: 238
-                    model: ["Filter ON : BW(0.5, 8.0)", "Filter ON : HP(0.1)", "Filter OFF"]
+                    model: ["Filter ON : hp:0.3, lp:20 (structural)", "Filter ON : hp:0.1", "Filter OFF"]
                     currentIndex: root.filterEnabled ? 0 : 2
                     onActivated: root.filterEnabled = currentIndex !== 2
                 }
