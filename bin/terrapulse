@@ -31,8 +31,36 @@ IS_WIN = platform.system() == "Windows"
 
 
 def root_dir():
+    """Install prefix (e.g. /usr/local) or the source-tree root."""
     env = os.environ.get("TP_ROOT")
     return Path(env).resolve() if env else Path(__file__).resolve().parents[1]
+
+
+# Path layout differs between running from the source tree (<root>/etc, <root>/share,
+# <root>/var) and an installed tree (<prefix>/etc/terrapulse, <prefix>/share/terrapulse).
+# Detect which, and let TP_CONFIG / TP_SHARE / TP_STATE / TP_RUN / TP_LOG override.
+def etc_dir(root):
+    env = os.environ.get("TP_CONFIG")
+    if env:
+        return Path(env).resolve()
+    if (root / "etc" / "modules.json").exists():
+        return root / "etc"                       # source tree
+    if (root / "etc" / "terrapulse" / "modules.json").exists():
+        return root / "etc" / "terrapulse"        # installed (<prefix>/etc/terrapulse)
+    return root / "etc"
+
+
+def share_dir(root):
+    env = os.environ.get("TP_SHARE")
+    if env:
+        return Path(env).resolve()
+    installed = root / "share" / "terrapulse"
+    return installed if installed.is_dir() else root / "share"
+
+
+def state_dir(root):
+    env = os.environ.get("TP_STATE")
+    return Path(env).resolve() if env else root / "var"
 
 
 def load_json(path, default):
@@ -44,15 +72,15 @@ def load_json(path, default):
 
 
 def load_modules(root):
-    return load_json(root / "etc" / "modules.json", {}).get("modules", [])
+    return load_json(etc_dir(root) / "modules.json", {}).get("modules", [])
 
 
 def load_roles(root):
-    return load_json(root / "etc" / "roles.json", {}).get("roles", {})
+    return load_json(etc_dir(root) / "roles.json", {}).get("roles", {})
 
 
 def enabled_path(root):
-    return root / "etc" / "enabled.json"
+    return etc_dir(root) / "enabled.json"
 
 
 def load_enabled(root):
@@ -85,7 +113,7 @@ def bin_path(root, module):
 def load_config(root):
     """Flat merge of etc/defaults/*.cfg then etc/*.cfg (key = value lines)."""
     cfg = {}
-    for d in (root / "etc" / "defaults", root / "etc"):
+    for d in (etc_dir(root) / "defaults", etc_dir(root)):
         if not d.is_dir():
             continue
         for f in sorted(d.glob("*.cfg")):
@@ -99,8 +127,9 @@ def load_config(root):
 
 class Env:
     """Passed to etc/init/<module>.py start_args(env)."""
-    def __init__(self, root, cfg, role, params):
+    def __init__(self, root, state, cfg, role, params):
         self.root = root
+        self.state = state
         self._cfg = cfg
         self.role = role
         self._params = params or {}
@@ -113,6 +142,9 @@ class Env:
         return default if v in (None, "") else v
 
     def path(self, *parts):
+        # "var/..." resolves under the state dir so it works installed too.
+        if parts and parts[0] == "var":
+            return str(self.state.joinpath(*parts[1:]))
         return str(self.root.joinpath(*parts))
 
     def log(self, message):
@@ -120,12 +152,13 @@ class Env:
 
 
 def make_env(root):
-    state = load_enabled(root)
-    return Env(root, load_config(root), state.get("role"), state.get("params", {}))
+    enabled = load_enabled(root)
+    return Env(root, state_dir(root), load_config(root),
+               enabled.get("role"), enabled.get("params", {}))
 
 
 def load_init(root, name):
-    path = root / "etc" / "init" / f"{name}.py"
+    path = etc_dir(root) / "init" / f"{name}.py"
     if not path.exists():
         return None
     spec = importlib.util.spec_from_file_location(f"tpinit_{name}", path)
@@ -151,13 +184,13 @@ def module_args(root, env, name):
 
 # ── process management (cross-platform) ────────────────────────────────────────
 def pid_dir(root):
-    path = root / "var" / "run"
+    path = state_dir(root) / "run"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 def log_dir(root):
-    path = root / "var" / "logs"
+    path = state_dir(root) / "logs"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -281,6 +314,22 @@ def command_check(root, modules):
     return 1 if errors else 0
 
 
+def command_printenv(root, modules):
+    layout = "source-tree" if (root / "etc" / "modules.json").exists() else \
+             ("installed" if (root / "etc" / "terrapulse" / "modules.json").exists() else "unknown")
+    enabled = load_enabled(root)
+    print(f"TP_ROOT       {root}")
+    print(f"layout        {layout}")
+    print(f"config (etc)  {etc_dir(root)}")
+    print(f"share         {share_dir(root)}")
+    print(f"state (var)   {state_dir(root)}")
+    print(f"run           {state_dir(root) / 'run'}")
+    print(f"logs          {state_dir(root) / 'logs'}")
+    print(f"binaries      {build_dir(root)}")
+    print(f"role          {enabled.get('role') or '(unset)'}")
+    return 0
+
+
 def command_update_config(root, modules):
     """Validate the configuration (SeisComp's update-config / scchkcfg role):
     every per-sensor binding must name a known module and an existing profile,
@@ -289,7 +338,7 @@ def command_update_config(root, modules):
     problems = 0
     print(f"configuration root: {root}")
 
-    keydir = root / "etc" / "key"
+    keydir = etc_dir(root) / "key"
     if not keydir.is_dir():
         print("no bindings (etc/key missing) - all sensors use global config")
     else:
@@ -306,7 +355,7 @@ def command_update_config(root, modules):
                     print(f"    ! unknown module '{mod}'")
                     problems += 1
                 elif prof:
-                    pf = root / "etc" / mod / f"profile_{prof}.cfg"
+                    pf = etc_dir(root) / mod / f"profile_{prof}.cfg"
                     if pf.exists():
                         print(f"    {mod} -> profile '{prof}'")
                     else:
@@ -319,7 +368,7 @@ def command_update_config(root, modules):
         if not bin_path(root, m["name"]).exists():
             print(f"! {m['name']}: executable not found")
             problems += 1
-        elif not (root / "etc" / "defaults" / f"{m['name']}.cfg").exists():
+        elif not (etc_dir(root) / "defaults" / f"{m['name']}.cfg").exists():
             print(f"  {m['name']}: no shipped defaults (etc/defaults/{m['name']}.cfg)")
 
     print(f"\n{'OK - no problems.' if problems == 0 else str(problems) + ' problem(s) found.'}")
@@ -390,6 +439,7 @@ def main(argv):
     sub.add_parser("roles")
     sub.add_parser("check")
     sub.add_parser("update-config")
+    sub.add_parser("print-env")
     sub.add_parser("status")
     p = sub.add_parser("setup")
     p.add_argument("--role", required=True)
@@ -424,6 +474,8 @@ def main(argv):
         return command_check(root, modules)
     elif ns.command == "update-config":
         return command_update_config(root, modules)
+    elif ns.command == "print-env":
+        return command_printenv(root, modules)
     elif ns.command == "status":
         command_status(root, modules)
     elif ns.command == "setup":
