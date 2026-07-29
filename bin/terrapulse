@@ -603,12 +603,24 @@ def stop_one(root, module):
 
 
 def exec_one(root, name, args):
-    exe = bin_path(root, name)
+    # Console views run appTerraPulse with a --view; "console"/"full" is the whole
+    # multi-page window. They read waveforms over the backbone, so auto-fill
+    # --slink/--inventory from the role (so the operator need not type them).
+    view = {"tprttv": "tprttv", "tpmap": "tpmap", "tpmv": "tpmap", "tpolv": "tpolv",
+            "console": "full", "full": "full"}.get(name)
+    exe = bin_path(root, "tprttv" if view else name)   # tprttv resolves to appTerraPulse
     if not exe.exists():
         raise SystemExit(f"{name}: executable not found: {exe}")
     argv = [str(exe)]
-    if name in ("tpmap", "tpmv", "tprttv", "tpolv") and exe.name.startswith("appTerraPulse"):
-        argv += ["--view", name]
+    if view and exe.name.startswith("appTerraPulse"):
+        argv += ["--view", view]
+        params = load_enabled(root).get("params", {})
+        if "--slink" not in args:
+            argv += ["--slink", f'{params.get("backbone_host", "127.0.0.1")}:{params.get("slink_serve", 18000)}']
+        if "--inventory" not in args:
+            inv = params.get("inventory", "config/inventory.example.json")
+            if inv:
+                argv += ["--inventory", inv]
     argv += args
     if IS_WIN:
         raise SystemExit(subprocess.call(argv))
