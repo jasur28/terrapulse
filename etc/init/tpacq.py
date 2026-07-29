@@ -3,8 +3,9 @@ class Module:
     order = 20
 
     # Acquisition. source = "sim" | "replay" | a device (COM6, /dev/ttyUSB0).
-    # Always feeds the SeedLink backbone; a hub node feeds only (--no-bus), a
-    # standalone/centre keeps the bus + archive so the console stays usable.
+    # Feeds the co-located SeedLink backbone (tpslinkserver on this node). An
+    # acquisition node has no local broker, so it feeds only (--no-bus); a
+    # standalone box keeps the bus + archive so its console stays usable.
     def start_args(self, env):
         source = env.param("source", "sim")
         if source == "sim":
@@ -18,11 +19,10 @@ class Module:
                  "--station", env.param("station", 1),
                  "--sensor", env.param("sensor", 1)]
 
-        feed = "%s:%s" % (env.param("center_host", "127.0.0.1"), env.param("slink_feed", 18001))
-        args += ["--slink", feed]
+        # Always feed the local backbone (tpslinkserver is co-located).
+        args += ["--slink", "127.0.0.1:%s" % env.param("slink_feed", 18001)]
+        args += ["--archive", env.path("var", "tds")]
 
-        if env.role == "hub":
-            args += ["--no-bus"]
-        else:
-            args += ["--archive", env.path("var", "tds")]
+        if env.role == "acquisition":
+            args += ["--no-bus"]           # no local broker on an acquisition node
         return args

@@ -5,7 +5,7 @@ class Module:
     # Structural-health processing off the SeedLink backbone; optional station
     # partition so several tpproc split the network.
     def start_args(self, env):
-        args = ["--slink", "%s:%s" % (env.param("center_host", "127.0.0.1"),
+        args = ["--slink", "%s:%s" % (env.param("backbone_host", "127.0.0.1"),
                                       env.param("slink_serve", 18000))]
         inv = env.param("inventory", "config/inventory.example.json")
         if inv:
