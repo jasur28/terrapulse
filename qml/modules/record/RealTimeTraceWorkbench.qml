@@ -10,7 +10,7 @@ Item {
     property int activeTab: 0
     property bool manualAssociatorVisible: false
     property int maxRows: 80
-    property int maxPoints: 1400
+    property int maxPoints: 6000
     property real windowSecs: 900
     property real baseTime: -1
     property real latestRelT: 0
@@ -168,7 +168,7 @@ Item {
     }
 
     Timer {
-        interval: 80
+        interval: 120
         running: root.visible
         repeat: true
         onTriggered: {
@@ -195,17 +195,43 @@ Item {
                 spacing: 0
 
                 TabButton {
+                    id: enabledTab
                     text: "\u2714  Enabled (" + streamRows().length + ")"
                     checked: root.activeTab === 0
                     onClicked: root.activeTab = 0
-                    height: 30
+                    height: 26
+                    font.pixelSize: 11
+                    contentItem: Text {
+                        text: enabledTab.text
+                        color: enabledTab.checked ? "#008000" : "#202020"
+                        font.pixelSize: 11
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                    background: Rectangle {
+                        color: enabledTab.checked ? "#ffffff" : "#d0d0d0"
+                        border.color: "#a8a8a8"
+                    }
                 }
 
                 TabButton {
+                    id: disabledTab
                     text: "\u2716  Disabled (0)"
                     checked: root.activeTab === 1
                     onClicked: root.activeTab = 1
-                    height: 30
+                    height: 26
+                    font.pixelSize: 11
+                    contentItem: Text {
+                        text: disabledTab.text
+                        color: disabledTab.checked ? "#b00000" : "#202020"
+                        font.pixelSize: 11
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                    background: Rectangle {
+                        color: disabledTab.checked ? "#ffffff" : "#d0d0d0"
+                        border.color: "#a8a8a8"
+                    }
                 }
 
                 Item { Layout.fillWidth: true }
@@ -244,11 +270,11 @@ Item {
                     var rows = root.streamRows()
                     var left = 156
                     var right = 18
-                    var top = 8
-                    var bottom = 64
+                    var top = 4
+                    var bottom = 48
                     var plotW = Math.max(1, width - left - right)
                     var plotH = Math.max(1, height - top - bottom)
-                    var rowH = Math.max(22, plotH / Math.max(1, rows.length))
+                    var rowH = Math.max(22, Math.min(34, plotH / Math.max(12, rows.length)))
                     var visibleRows = Math.min(rows.length, Math.floor(plotH / rowH))
                     var tEnd = Math.max(root.windowSecs, root.latestRelT + 1)
                     var tStart = Math.max(0, tEnd - root.windowSecs)
@@ -276,6 +302,14 @@ Item {
                     ctx.moveTo(left, top + visibleRows * rowH)
                     ctx.lineTo(left + plotW, top + visibleRows * rowH)
                     ctx.stroke()
+
+                    if (rows.length === 0) {
+                        ctx.fillStyle = "#777777"
+                        ctx.font = "12px sans-serif"
+                        ctx.textAlign = "center"
+                        ctx.textBaseline = "middle"
+                        ctx.fillText("Waiting for waveform streams", left + plotW / 2, top + Math.min(160, plotH / 2))
+                    }
 
                     for (var i = 0; i < visibleRows; i++) {
                         var row = rows[i]
@@ -322,25 +356,38 @@ Item {
                         ctx.fillStyle = "#6f6f75"
                         ctx.font = "10px monospace"
                         ctx.textAlign = "right"
-                        ctx.fillText(maxAbs.toExponential(1), left - 6, mid)
+                        ctx.fillText("amax " + maxAbs.toExponential(1), left - 6, mid - 6)
+                        ctx.fillText("mean " + mean.toExponential(1), left - 6, mid + 7)
                         ctx.textAlign = "left"
 
+                        // Display decimation: one vertical min/max segment per pixel.
+                        // This keeps the operator view fast with many sensors and long windows.
+                        var buckets = []
+                        for (var s = 0; s < series.length; s++) {
+                            if (series[s].t < tStart || series[s].t > tEnd) continue
+                            var bx = Math.floor((series[s].t - tStart) / tRange * plotW)
+                            if (bx < 0 || bx >= plotW) continue
+                            var by = mid - (series[s].v - mean) * scale
+                            var b = buckets[bx]
+                            if (b === undefined) buckets[bx] = { min: by, max: by }
+                            else {
+                                if (by < b.min) b.min = by
+                                if (by > b.max) b.max = by
+                            }
+                        }
                         ctx.strokeStyle = row.color
                         ctx.lineWidth = 1
                         ctx.beginPath()
-                        var moved = false
-                        for (var s = 0; s < series.length; s++) {
-                            if (series[s].t < tStart) continue
-                            var x = tx(series[s].t)
-                            var y = mid - (series[s].v - mean) * scale
-                            if (!moved) {
-                                ctx.moveTo(x, y)
-                                moved = true
-                            } else {
-                                ctx.lineTo(x, y)
-                            }
+                        var any = false
+                        for (var bx2 = 0; bx2 < buckets.length; bx2++) {
+                            var bb = buckets[bx2]
+                            if (bb === undefined) continue
+                            var xx = left + bx2
+                            ctx.moveTo(xx, bb.min)
+                            ctx.lineTo(xx, bb.max)
+                            any = true
                         }
-                        if (moved) ctx.stroke()
+                        if (any) ctx.stroke()
 
                         ctx.strokeStyle = "#9a9a9a"
                         ctx.lineWidth = 0.7
@@ -388,7 +435,7 @@ Item {
                         ctx.stroke()
                         ctx.fillText(root.formatClock(tt), xTick, top + visibleRows * rowH + 12)
                     }
-                    ctx.fillText(new Date().toISOString().slice(0, 10), left + 80, top + visibleRows * rowH + 36)
+                    ctx.fillText(new Date().toISOString().slice(0, 10), left + 80, top + visibleRows * rowH + 34)
                     }
                 }
             }

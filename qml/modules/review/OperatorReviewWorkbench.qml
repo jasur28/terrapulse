@@ -156,7 +156,8 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 32
+            Layout.preferredHeight: 0
+            visible: false
             color: "#eeeeee"
             border.color: "#b6b6b6"
 
@@ -164,7 +165,7 @@ Item {
                 anchors.fill: parent
                 anchors.leftMargin: 8
                 anchors.rightMargin: 8
-                spacing: 8
+                spacing: 4
 
                 ClassicToolButton { text: "\u21b6"; enabled: root.selectedIndex < root.events.length - 1; onClicked: root.selectEvent(root.selectedIndex + 1) }
                 ClassicToolButton { text: "\u21b7"; enabled: root.selectedIndex > 0; onClicked: root.selectEvent(root.selectedIndex - 1) }
@@ -183,11 +184,30 @@ Item {
         TabBar {
             id: tabs
             Layout.fillWidth: true
+            Layout.preferredHeight: 28
             currentIndex: root.currentTab
             onCurrentIndexChanged: root.currentTab = currentIndex
             Repeater {
                 model: root.tabNames
-                TabButton { text: modelData; width: implicitWidth + 22 }
+                TabButton {
+                    id: reviewTab
+                    text: modelData
+                    width: Math.max(88, label.implicitWidth + 22)
+                    height: 28
+                    contentItem: Text {
+                        id: label
+                        text: reviewTab.text
+                        color: reviewTab.checked ? "#101010" : "#333333"
+                        font.pixelSize: 11
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignHCenter
+                        elide: Text.ElideRight
+                    }
+                    background: Rectangle {
+                        color: reviewTab.checked ? "#ffffff" : "#d0d0d0"
+                        border.color: "#a8a8a8"
+                    }
+                }
             }
         }
 
@@ -201,24 +221,24 @@ Item {
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 6
+                    anchors.margins: 4
+                    spacing: 4
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 360
-                        spacing: 12
+                        Layout.preferredHeight: 320
+                        spacing: 6
 
                         ColumnLayout {
                             Layout.preferredWidth: 545
                             Layout.fillHeight: true
-                            spacing: 6
+                            spacing: 4
 
                             Text {
                                 Layout.fillWidth: true
                                 text: selectedEvent ? selectedEvent.region : "Structural Event Region"
                                 color: "#202020"
-                                font.pixelSize: 20
+                                font.pixelSize: 16
                                 font.bold: true
                                 elide: Text.ElideRight
                             }
@@ -254,7 +274,7 @@ Item {
                                     "Lon:", selectedEvent.lon.toFixed(4),
                                     "Sensors:", "" + selectedEvent.phases,
                                     "Detection RMS:", selectedEvent.rms.toFixed(2),
-                                    "Sensor gap:", selectedEvent.gap + " °",
+                                    "Sensor gap:", selectedEvent.gap + " deg",
                                     "Nearest:", (selectedEvent.minDist * 1000).toFixed(0) + " m",
                                     "EventID:", selectedEvent.id,
                                     "Agency:", selectedEvent.agency,
@@ -336,18 +356,18 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 78
+            Layout.preferredHeight: 66
             color: "#eeeeee"
             border.color: "#b6b6b6"
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 8
-                spacing: 6
+                anchors.margins: 5
+                spacing: 4
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 8
+                    spacing: 6
 
                     ComboBox { Layout.preferredWidth: 140; model: ["TPLOC", "Grid search", "Least squares"] }
                     ClassicToolButton { text: "\u2699" }
@@ -366,7 +386,7 @@ Item {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 8
+                    spacing: 6
 
                     ClassicToolButton { text: "Relocate" }
                     ClassicToolButton { text: "\u25b6 Run..." }

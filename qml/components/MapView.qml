@@ -308,11 +308,11 @@ Item {
         onPaint: {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
-            ctx.strokeStyle = "rgba(255,255,255,0.78)"
+            ctx.strokeStyle = "rgba(255,255,255,0.58)"
             ctx.lineWidth = 1
             ctx.setLineDash([1, 3])
-            ctx.fillStyle = "rgba(255,255,255,0.95)"
-            ctx.font = "11px sans-serif"
+            ctx.fillStyle = "rgba(25,25,25,0.85)"
+            ctx.font = "10px sans-serif"
 
             var lonStep = control.spanLon > 120 ? 30 : control.spanLon > 40 ? 10 : control.spanLon > 10 ? 2 : control.spanLon > 2 ? 0.5 : 0.1
             var latSpan = control.vLatMax - control.vLatMin
@@ -350,7 +350,7 @@ Item {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
             var m = control.markers || []
-            ctx.font = "bold 11px sans-serif"
+            ctx.font = "bold 10px sans-serif"
             ctx.textBaseline = "middle"
 
             for (var i = 0; i < m.length; i++) {
@@ -368,9 +368,9 @@ Item {
 
                 if (selected) {
                     ctx.strokeStyle = marker.shape === "event" ? Theme.colorWarning : Theme.colorCritical
-                    ctx.lineWidth = 3
+                    ctx.lineWidth = 2
                     ctx.beginPath()
-                    ctx.arc(x, y, marker.shape === "event" ? 13 : 11, 0, Math.PI * 2)
+                    ctx.arc(x, y, marker.shape === "event" ? 14 : 12, 0, Math.PI * 2)
                     ctx.stroke()
                 }
 
@@ -380,14 +380,19 @@ Item {
 
                 if (marker.shape === "event") {
                     ctx.beginPath()
-                    ctx.arc(x, y, 7, 0, Math.PI * 2)
+                    ctx.arc(x, y, 6, 0, Math.PI * 2)
                     ctx.fill()
+                    ctx.stroke()
+                    ctx.strokeStyle = "rgba(120,0,120,0.55)"
+                    ctx.lineWidth = 2
+                    ctx.beginPath()
+                    ctx.arc(x, y, 11, 0, Math.PI * 2)
                     ctx.stroke()
                 } else {
                     ctx.beginPath()
-                    ctx.moveTo(x, y - 9)
-                    ctx.lineTo(x - 8, y + 7)
-                    ctx.lineTo(x + 8, y + 7)
+                    ctx.moveTo(x, y - 8)
+                    ctx.lineTo(x - 7, y + 7)
+                    ctx.lineTo(x + 7, y + 7)
                     ctx.closePath()
                     if (marker.shape === "disabled") ctx.fillStyle = "#f2f2f2"
                     ctx.fill()
@@ -402,12 +407,12 @@ Item {
 
                 if (control.showLabels || marker.alwaysLabel) {
                     var text = marker.label || ""
-                    ctx.lineWidth = 3
-                    ctx.strokeStyle = "rgba(255,255,255,0.88)"
+                    ctx.lineWidth = 2
+                    ctx.strokeStyle = "rgba(255,255,255,0.72)"
                     ctx.fillStyle = "#111111"
                     ctx.textAlign = "left"
-                    ctx.strokeText(text, x + 10, y + 1)
-                    ctx.fillText(text, x + 10, y + 1)
+                    ctx.strokeText(text, x + 9, y + 1)
+                    ctx.fillText(text, x + 9, y + 1)
                 }
             }
         }
@@ -463,9 +468,9 @@ Item {
             ]
 
             Rectangle {
-                width: 30
-                height: 30
-                radius: 4
+                width: 28
+                height: 28
+                radius: 2
                 color: Theme.surface
                 border.color: Theme.border
                 border.width: 1

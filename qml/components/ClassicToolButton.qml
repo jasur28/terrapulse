@@ -8,14 +8,14 @@ Button {
     property bool danger: false
     property bool success: false
 
-    implicitHeight: 28
-    implicitWidth: Math.max(34, contentItem.implicitWidth + 18)
+    implicitHeight: 24
+    implicitWidth: Math.max(28, contentItem.implicitWidth + 14)
     padding: 0
-    leftPadding: 9
-    rightPadding: 9
+    leftPadding: 7
+    rightPadding: 7
     spacing: 5
 
-    font.pixelSize: 12
+    font.pixelSize: 11
     font.bold: false
     palette.buttonText: Theme.textPrimary
 
@@ -32,8 +32,8 @@ Button {
     }
 
     background: Rectangle {
-        implicitHeight: 28
-        radius: 2
+        implicitHeight: 24
+        radius: 1
         color: !control.enabled ? "#e7e7e7"
              : control.checked ? "#c8dff4"
              : control.down ? "#c6c6c6"

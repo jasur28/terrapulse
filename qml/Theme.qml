@@ -3,12 +3,12 @@ import QtQuick
 
 QtObject {
     // Classic Qt/SeisComp-like workbench colors.
-    readonly property color background:  "#d6d6d6"
-    readonly property color surface:     "#efefef"
+    readonly property color background:  "#d9d9d9"
+    readonly property color surface:     "#eeeeee"
     readonly property color surfaceAlt:  "#ffffff"
-    readonly property color navBg:       "#c8c8c8"
-    readonly property color accent:      "#3b6ea5"
-    readonly property color border:      "#8f8f8f"
+    readonly property color navBg:       "#cfcfcf"
+    readonly property color accent:      "#2f7dbd"
+    readonly property color border:      "#9a9a9a"
 
     // Text
     readonly property color textPrimary:   "#101010"
@@ -28,15 +28,15 @@ QtObject {
     readonly property color seriesZ: "#1a9641"
 
     // Typography
-    readonly property int fontSizeSmall:  11
-    readonly property int fontSizeNormal: 13
-    readonly property int fontSizeLarge:  16
-    readonly property int fontSizeTitle:  20
+    readonly property int fontSizeSmall:  10
+    readonly property int fontSizeNormal: 12
+    readonly property int fontSizeLarge:  14
+    readonly property int fontSizeTitle:  18
 
     // Layout
     readonly property int navWidth:    180
-    readonly property int radius:        6
-    readonly property int radiusSmall:   4
+    readonly property int radius:        2
+    readonly property int radiusSmall:   1
 
     function statusColor(warningLevel) {
         if (warningLevel === 2) return colorCritical

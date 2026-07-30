@@ -10,6 +10,7 @@ Item {
     // overlays, instead of mutually-exclusive modes.
     property int colorLayer: 0            // 0 = network health, 1 = ground motion, 2 = QC
     property bool layerEvents: true       // overlay structural events on the map
+    property bool eventTableVisible: false
     property int selected: -1
     property bool legendVisible: true
     property bool annotations: true
@@ -148,10 +149,10 @@ Item {
         anchors.fill: parent
         spacing: 0
 
-        // Layer controls: one active colour layer + additive overlays.
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 38
+            Layout.preferredHeight: 0
+            visible: false
             color: Theme.surface
             border.color: Theme.border
 
@@ -226,9 +227,9 @@ Item {
                 }
             }
 
-            // Side column: structural events (EventLayer / EventData), compact.
             Rectangle {
-                Layout.preferredWidth: 300
+                visible: root.eventTableVisible
+                Layout.preferredWidth: visible ? 360 : 0
                 Layout.fillHeight: true
                 color: Theme.surface
                 border.color: Theme.border
@@ -246,7 +247,7 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             anchors.left: parent.left
                             anchors.leftMargin: 10
-                            text: "Events near map (" + root.events.length + ")"
+                            text: "Events (" + root.events.length + ")"
                             font.pixelSize: 11; font.bold: true; color: Theme.textPrimary
                         }
                     }
@@ -259,7 +260,7 @@ Item {
                             anchors.fill: parent
                             anchors.leftMargin: 10
                             spacing: 0
-                            property var w: [96, 150, 34]
+                            property var w: [92, 196, 42]
                             Repeater {
                                 model: ["Time", "Type", "Sev"]
                                 Text {
@@ -285,7 +286,7 @@ Item {
                                 anchors.fill: parent
                                 anchors.leftMargin: 10
                                 spacing: 0
-                                property var w: [96, 150, 34]
+                                property var w: [92, 196, 42]
                                 Text {
                                     width: parent.w[0]; height: parent.height
                                     text: new Date(modelData.time).toLocaleTimeString(Qt.locale(), "hh:mm:ss")

@@ -10,7 +10,7 @@ Rectangle {
     property string rightText: ""
     property bool live: false
 
-    height: 23
+    height: 20
     color: "#eeeeee"
     border.color: "#b0b0b0"
 
@@ -18,7 +18,7 @@ Rectangle {
         anchors.fill: parent
         anchors.leftMargin: 8
         anchors.rightMargin: 8
-        spacing: 10
+        spacing: 8
 
         Rectangle {
             Layout.preferredWidth: 8
@@ -31,7 +31,7 @@ Rectangle {
             Layout.preferredWidth: 280
             text: root.leftText
             color: Theme.textPrimary
-            font.pixelSize: 11
+            font.pixelSize: 10
             elide: Text.ElideRight
         }
 
@@ -39,7 +39,7 @@ Rectangle {
             Layout.fillWidth: true
             text: root.centerText
             color: "#333333"
-            font.pixelSize: 11
+            font.pixelSize: 10
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
         }
@@ -48,7 +48,7 @@ Rectangle {
             Layout.preferredWidth: 320
             text: root.rightText
             color: Theme.textPrimary
-            font.pixelSize: 11
+            font.pixelSize: 10
             horizontalAlignment: Text.AlignRight
             elide: Text.ElideRight
         }

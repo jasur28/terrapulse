@@ -393,14 +393,32 @@ def command_alias(root, ns):
 
 
 def command_check(root, modules):
-    errors = 0
-    for m in enabled_daemons(root, modules) or daemon_modules(modules):
-        exe = bin_path(root, m.get("base", m["name"]))
-        if not exe.exists():
-            print(f"! {m['name']}: executable not found: {exe}")
-            errors += 1
-    print("problems found" if errors else "OK")
-    return 1 if errors else 0
+    """Watchdog (SeisComp `seiscomp check`): make sure every enabled daemon is
+    running — (re)start any that died — and flag missing executables. Run it
+    periodically (cron / systemd timer) so a crashed archiver or broker comes back."""
+    enabled = enabled_daemons(root, modules)
+    if not enabled:
+        print("no enabled daemons (run: terrapulse setup --role <name>)")
+        return 0
+    problems = 0
+    restarted = 0
+    for m in enabled:
+        name = m["name"]
+        if m.get("oneshot"):
+            continue                                  # runs once at start, not a daemon
+        if not bin_path(root, m.get("base", name)).exists():
+            print(f"! {name}: executable not found")
+            problems += 1
+            continue
+        pid = read_pid(root, name)
+        if is_running(pid):
+            print(f"  {name}: running pid={pid}")
+        else:
+            print(f"~ {name}: not running -> starting")
+            start_one(root, m)
+            restarted += 1
+    print(f"\n{'OK' if problems == 0 else str(problems) + ' problem(s)'} - {restarted} (re)started")
+    return 1 if problems else 0
 
 
 # OS packages per category (Debian/Ubuntu names). "base" is enough for a headless
@@ -476,23 +494,44 @@ def command_systemd(root, install):
         "[Install]\n"
         "WantedBy=multi-user.target\n"
     )
+    # Watchdog: a timer runs `terrapulse check` every minute to restart any daemon
+    # (archiver, broker, …) that crashed.
+    check_service = (
+        "[Unit]\nDescription=TerraPulse watchdog (restart crashed daemons)\n\n"
+        "[Service]\nType=oneshot\n"
+        f"Environment=TP_ROOT={root}\n{ld}\n"
+        f"ExecStart={py} {cmd} check\n"
+    )
+    check_timer = (
+        "[Unit]\nDescription=Run the TerraPulse watchdog every minute\n\n"
+        "[Timer]\nOnBootSec=1min\nOnUnitActiveSec=1min\n\n"
+        "[Install]\nWantedBy=timers.target\n"
+    )
+    units = {"terrapulse.service": unit,
+             "terrapulse-check.service": check_service,
+             "terrapulse-check.timer": check_timer}
+
     if IS_WIN:
-        print("systemd is Linux-only. Generated unit for reference:\n")
-        print(unit)
+        print("systemd is Linux-only. Generated units for reference:\n")
+        for n, u in units.items():
+            print(f"# ---- {n} ----\n{u}")
         return 0
     if install:
-        dest = "/etc/systemd/system/terrapulse.service"
         try:
-            subprocess.run(["sudo", "tee", dest], input=unit, text=True,
-                           check=True, stdout=subprocess.DEVNULL)
+            for n, u in units.items():
+                subprocess.run(["sudo", "tee", f"/etc/systemd/system/{n}"], input=u,
+                               text=True, check=True, stdout=subprocess.DEVNULL)
             subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
         except Exception as exc:
             print(f"install failed: {exc}")
             return 1
-        print(f"installed {dest}\nenable at boot: sudo systemctl enable --now terrapulse")
+        print("installed terrapulse.service + watchdog timer.\n"
+              "enable at boot:   sudo systemctl enable --now terrapulse\n"
+              "enable watchdog:  sudo systemctl enable --now terrapulse-check.timer")
         return 0
-    print(unit)
-    print("# install: terrapulse systemd --install  (writes /etc/systemd/system/terrapulse.service)")
+    for n, u in units.items():
+        print(f"# ---- {n} ----\n{u}")
+    print("# install all three: terrapulse systemd --install")
     return 0
 
 
