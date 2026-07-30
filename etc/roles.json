@@ -12,9 +12,9 @@
       "params": {"source": "sim", "slink_serve": 18000, "slink_feed": 18001}
     },
     "center": {
-      "description": "Object monitoring centre: broker, processing and web services. Pulls waveforms from an acquisition node's SeedLink backbone (backbone_host).",
-      "enable": ["tpmaster", "tpinv", "tpproc", "tpqc", "tpwfparam", "tpevent", "tpws"],
-      "params": {"backbone_host": "127.0.0.1", "slink_serve": 18000, "stations": ""}
+      "description": "Object monitoring centre: broker, processing, web, and a SeedLink archiver (tpslink, like SeisComp slarchive) that pulls the acquisition node's stream and writes miniSEED locally.",
+      "enable": ["tpmaster", "tpinv", "tpslink", "tpproc", "tpqc", "tpwfparam", "tpevent", "tpws"],
+      "params": {"backbone_host": "127.0.0.1", "slink_serve": 18000, "arch_net": "TP", "arch_sta": "1", "stations": ""}
     },
     "processor": {
       "description": "Dedicated processing node: reads an acquisition node's backbone and handles one station partition.",
