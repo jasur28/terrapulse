@@ -20,8 +20,15 @@ Item {
     property bool filterEnabled: false
     property bool traceDirty: false
 
+    // Latest live values (from the SeedLink backbone via liveWaveform).
+    property real lastX: 0
+    property real lastY: 0
+    property real lastZ: 0
+    property real lastRate: 0
+    property string lastStream: "0.0.0"
+
     function streamName() {
-        return acq.station + "." + acq.object + "." + acq.sensor
+        return root.lastStream
     }
 
     function trimPoints() {
@@ -50,7 +57,7 @@ Item {
         mean /= N
         for (i = 0; i < N; i++) v[i] -= mean
 
-        var fs = acq.sampleRate > 0 ? acq.sampleRate : 200
+        var fs = root.lastRate > 0 ? root.lastRate : 200
         var bins = Math.floor(N / 2)
         var spec = []
         var maxMag = 1e-9
@@ -135,10 +142,10 @@ Item {
     }
 
     Connections {
-        target: acq
+        target: liveWaveform
 
-        function onConnectedChanged() {
-            if (!acq.connected) return
+        function onStateChanged() {
+            if (liveWaveform.connected) return
             root.ptsX = []
             root.ptsY = []
             root.ptsZ = []
@@ -153,6 +160,11 @@ Item {
             var t = sample.timestampMs / 1000.0
             if (root.baseTime < 0) root.baseTime = t
             root.latestRelT = t - root.baseTime
+
+            root.lastX = sample.x; root.lastY = sample.y; root.lastZ = sample.z
+            root.lastRate = sample.sampleRate || 200
+            var o = sample.object !== undefined ? sample.object : sample.station
+            root.lastStream = o + "." + o + "." + (sample.sensor !== undefined ? sample.sensor : 1)
 
             root.ptsX.push({ t: root.latestRelT, v: sample.x })
             root.ptsY.push({ t: root.latestRelT, v: sample.y })
@@ -194,9 +206,9 @@ Item {
             }
 
             StatusPill {
-                text: acq.connected ? "LIVE" : "OFFLINE"
-                fill: acq.connected ? Theme.colorNormal : Theme.colorOffline
-                textColor: acq.connected ? "#001d0b" : "#ffffff"
+                text: liveWaveform.connected ? "LIVE" : "OFFLINE"
+                fill: liveWaveform.connected ? Theme.colorNormal : Theme.colorOffline
+                textColor: liveWaveform.connected ? "#001d0b" : "#ffffff"
             }
 
             Button {
@@ -225,22 +237,22 @@ Item {
                 Layout.fillWidth: true
                 label: "Stream"
                 value: root.streamName()
-                detail: acq.endpoint
+                detail: liveWaveform.endpoint
                 accent: Theme.colorService
             }
 
             MetricTile {
                 Layout.fillWidth: true
                 label: "Sample rate"
-                value: acq.sampleRate.toFixed(0) + " Hz"
-                detail: acq.packetCount + " samples"
+                value: root.lastRate.toFixed(0) + " Hz"
+                detail: liveWaveform.records + " samples"
                 accent: Theme.colorNormal
             }
 
             MetricTile {
                 Layout.fillWidth: true
                 label: "Current X"
-                value: acq.lastX.toFixed(2)
+                value: root.lastX.toFixed(2)
                 detail: "gal"
                 accent: Theme.seriesX
             }
@@ -248,7 +260,7 @@ Item {
             MetricTile {
                 Layout.fillWidth: true
                 label: "Current Y"
-                value: acq.lastY.toFixed(2)
+                value: root.lastY.toFixed(2)
                 detail: "gal"
                 accent: Theme.seriesY
             }
@@ -256,7 +268,7 @@ Item {
             MetricTile {
                 Layout.fillWidth: true
                 label: "Current Z"
-                value: acq.lastZ.toFixed(2)
+                value: root.lastZ.toFixed(2)
                 detail: "gal"
                 accent: Theme.seriesZ
             }
@@ -295,7 +307,7 @@ Item {
                         Layout.fillHeight: true
                         spectrum: root.spectrum
                         dominantFrequency: root.domFreq
-                        sampleRate: acq.sampleRate > 0 ? acq.sampleRate : 200
+                        sampleRate: root.lastRate > 0 ? root.lastRate : 200
                     }
 
                     TrendPlot {
