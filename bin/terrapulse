@@ -127,7 +127,12 @@ def save_enabled(root, state):
 
 def build_dir(root):
     env = os.environ.get("TP_BUILD")
-    return Path(env).resolve() if env else root / "build" / "Desktop_Qt_6_9_3_MinGW_64_bit-Debug"
+    if env:
+        return Path(env).resolve()
+    win = root / "build" / "Desktop_Qt_6_9_3_MinGW_64_bit-Debug"   # Qt Creator (Windows)
+    if win.exists():
+        return win
+    return root / "build"                                          # plain cmake -B build (Linux)
 
 
 def bin_path(root, module):
