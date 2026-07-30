@@ -134,13 +134,8 @@ Item {
         target: liveWaveform
 
         function onStateChanged() {
-            if (!liveWaveform.connected) {
-                root.liveSeries = ({})
-                root.picks = []
-                root.baseTime = -1
-                root.latestRelT = 0
-                canvas.requestPaint()
-            }
+            // Keep the trace across brief reconnects — don't wipe on a transient
+            // disconnect (connected can flip between record bursts over the network).
         }
 
         function onSampleReceived(sample) {

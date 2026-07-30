@@ -145,15 +145,8 @@ Item {
         target: liveWaveform
 
         function onStateChanged() {
-            if (liveWaveform.connected) return
-            root.ptsX = []
-            root.ptsY = []
-            root.ptsZ = []
-            root.ptsH = []
-            root.spectrum = []
-            root.baseTime = -1
-            root.latestRelT = 0
-            healthPlot.points = []
+            // Keep the trace across brief reconnects — don't wipe on a transient
+            // disconnect (checkLiveness can flip connected between record bursts).
         }
 
         function onSampleReceived(sample) {
