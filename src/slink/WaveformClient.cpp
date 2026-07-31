@@ -90,6 +90,14 @@ void WaveformClient::onReadyRead() {
                                  d.sid.c_str());
                 continue;
             }
+            // Keep the record's real FDSN identity (net/sta/loc + this axis' channel).
+            std::string inet, ista, iloc, ichan; int icomp = -1;
+            if (tp::mseed::splitIdentity(d.sid, inet, ista, iloc, ichan, icomp) &&
+                icomp >= 0 && icomp < 3) {
+                StreamIdentity& id = m_ids[(uint64_t(obj) << 32) | sen];
+                id.net = inet; id.sta = ista; id.loc = iloc; id.chan[icomp] = ichan;
+            }
+
             auto& ax = m_axes[(uint64_t(obj) << 32) | sen];
             for (std::size_t i = 0; i < d.samples.size(); ++i)
                 ax.q[comp].emplace_back(d.startTimeMs + int64_t(i * 1000.0 / d.sampleRate),
@@ -132,6 +140,13 @@ void WaveformClient::emitTriples(uint32_t object, uint32_t sensor) {
                               tx, m_lastRate });
         X.pop_front(); Y.pop_front(); Z.pop_front();
     }
+}
+
+bool WaveformClient::identity(uint32_t object, uint32_t sensor, StreamIdentity& out) const {
+    const auto it = m_ids.find((uint64_t(object) << 32) | sensor);
+    if (it == m_ids.end()) return false;
+    out = it->second;
+    return true;
 }
 
 } // namespace tp::slink

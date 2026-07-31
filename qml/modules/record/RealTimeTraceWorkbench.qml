@@ -37,33 +37,96 @@ Item {
         return pad2(d.getUTCHours()) + ":" + pad2(d.getUTCMinutes()) + ":" + pad2(d.getUTCSeconds())
     }
 
+    // FDSN identity from the inventory (display only): map a live stream's numeric
+    // object/sensor to the real network / station code / sensor location, and derive
+    // the SEED channel code from the sensor kind + rate (StreamId rules) so an SM-3
+    // seismometer reads EHZ, not HNZ.
+    function structFor(objId) {
+        var s = inventory.structures || []
+        for (var i = 0; i < s.length; i++)
+            if (Number(s[i].objectId) === Number(objId)) return s[i]
+        return null
+    }
+    function sensorFor(objId, senId) {
+        var s = inventory.sensors || []
+        for (var i = 0; i < s.length; i++)
+            if (Number(s[i].objectId) === Number(objId) && Number(s[i].sensorId) === Number(senId)) return s[i]
+        return null
+    }
+    function channelCode(sensor, rate, comp) {
+        var kind = sensor && sensor.kind ? String(sensor.kind) : "accelerometer"
+        var corner = (sensor && sensor.cornerPeriod !== undefined) ? Number(sensor.cornerPeriod)
+                     : (kind === "seismometer" ? 2.0 : 1e9)
+        var r = rate > 0 ? rate : 200
+        var broadband = corner >= 10.0
+        var band = r >= 80 ? (broadband ? "H" : "E")
+                 : r >= 10 ? (broadband ? "B" : "S")
+                 : r >= 1  ? "M" : "L"
+        var instr = kind === "seismometer" ? "H" : "N"
+        var orient = kind === "seismometer" ? ["Z", "N", "E"][comp] : ["X", "Y", "Z"][comp]
+        return band + instr + orient
+    }
+
+    // Live rows use the REAL identity carried by the stream (net/stationCode/location
+    // and per-axis channel code) — computed once in C++/inventory on the backend, not
+    // re-derived here, so the GUI and backend can never disagree.
+    function rowsFromStream(ls) {
+        var lobj = ls.object !== undefined ? ls.object : ls.station
+        var lsen = ls.sensor !== undefined ? ls.sensor : 1
+        var net = ls.network ? String(ls.network) : "TP"
+        var name = ls.stationCode ? String(ls.stationCode) : String(lobj)
+        var loc = ls.location ? String(ls.location) : ""
+        var chs = ls.channels || []
+        var colors = [Theme.seriesX, Theme.seriesY, Theme.seriesZ]
+        var comps = ["x", "y", "z"]
+        var defc = ["HNX", "HNY", "HNZ"]
+        var out = []
+        for (var c = 0; c < 3; c++)
+            out.push({ station: String(lobj), object: Number(lobj), stationName: name,
+                       network: net, sensor: String(lsen), location: loc,
+                       channel: chs[c] ? String(chs[c]) : defc[c], component: comps[c], compIndex: c,
+                       enabled: true, color: colors[c] })
+        return out
+    }
+
+    // Inventory-derived rows — used only as an offline preview when no stream is live
+    // yet. channelCode() here mirrors the backend StreamId rules for that preview.
+    function makeRows(objId, senId, network, rate) {
+        var st = structFor(objId)
+        var sn = sensorFor(objId, senId)
+        var net = st && st.network ? String(st.network) : (network ? String(network) : "TP")
+        var name = st && st.stationCode ? String(st.stationCode) : String(objId)
+        var loc = sn && sn.location ? String(sn.location) : ""
+        var colors = [Theme.seriesX, Theme.seriesY, Theme.seriesZ]
+        var comps = ["x", "y", "z"]
+        var out = []
+        for (var c = 0; c < 3; c++)
+            out.push({ station: String(objId), object: Number(objId), stationName: name,
+                       network: net, sensor: String(senId), location: loc,
+                       channel: channelCode(sn, rate, c), component: comps[c], compIndex: c,
+                       enabled: true, color: colors[c] })
+        return out
+    }
+
     function streamRows() {
         var rows = []
         // Prefer the streams actually arriving over the SeedLink backbone (the
         // RecordStream model): the view reflects live records, not static inventory.
         var live = liveWaveform.streams || []
         if (live.length > 0) {
-            for (var k = 0; k < live.length && rows.length < root.maxRows; k++) {
-                var ls = live[k]
-                var lsta = String(ls.station !== undefined ? ls.station : ls.object)
-                var lsen = String(ls.sensor !== undefined ? ls.sensor : 1)
-                var lnet = ls.network !== undefined ? String(ls.network) : "TP"
-                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HNX", component: "x", enabled: true, color: Theme.seriesX })
-                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HNY", component: "y", enabled: true, color: Theme.seriesY })
-                rows.push({ station: lsta, network: lnet, sensor: lsen, channel: "HNZ", component: "z", enabled: true, color: Theme.seriesZ })
-            }
+            for (var k = 0; k < live.length && rows.length < root.maxRows; k++)
+                rows = rows.concat(rowsFromStream(live[k]))
             return rows.filter(function(r) { return root.activeTab === 0 ? r.enabled : !r.enabled })
         }
         var sensors = inventory.sensors || []
         for (var i = 0; i < sensors.length && rows.length < root.maxRows; i++) {
             var s = sensors[i]
-            var sta = String(s.objectId !== undefined ? s.objectId : "OBJ")
-            var sen = String(s.sensorId !== undefined ? s.sensorId : i + 1)
-            var net = s.network !== undefined ? String(s.network) : "TP"
-            var enabled = s.hasData !== false
-            rows.push({ station: sta, network: net, sensor: sen, channel: "HNX", component: "x", enabled: enabled, color: Theme.seriesX })
-            rows.push({ station: sta, network: net, sensor: sen, channel: "HNY", component: "y", enabled: enabled, color: Theme.seriesY })
-            rows.push({ station: sta, network: net, sensor: sen, channel: "HNZ", component: "z", enabled: enabled, color: Theme.seriesZ })
+            var oid = s.objectId !== undefined ? s.objectId : i + 1
+            var sid = s.sensorId !== undefined ? s.sensorId : i + 1
+            var srate = (s.channels && s.channels[0] && s.channels[0].sampleRate) ? s.channels[0].sampleRate : 200
+            var made = makeRows(oid, sid, s.network, Number(srate))
+            var en = s.hasData !== false
+            for (var m = 0; m < made.length; m++) { made[m].enabled = en; rows.push(made[m]) }
         }
         if (rows.length === 0) {
             rows = [
@@ -325,14 +388,11 @@ Item {
                         ctx.lineTo(left + plotW, y0 + rowH)
                         ctx.stroke()
 
-                        // Look up this row's channel in the C++-built envelope.
+                        // The envelope channels are ordered by component (0/1/2), so
+                        // match by index — the row's real channel code (HNZ vs EHZ) need
+                        // not equal the envelope's, only the axis.
                         var envStream = envIdx[row.station + "." + row.sensor]
-                        var cd = null
-                        if (envStream) {
-                            var clist = envStream.chans
-                            for (var ci = 0; ci < clist.length; ci++)
-                                if (clist[ci].channel === row.channel) { cd = clist[ci]; break }
-                        }
+                        var cd = (envStream && envStream.chans) ? envStream.chans[row.compIndex] : null
                         var mean = cd ? cd.mean : 0
                         var peak = cd ? cd.peak : 1e-9
                         var rms  = cd ? cd.rms : 0
@@ -342,15 +402,20 @@ Item {
                         if (span < 1e-9) span = 1e-9
                         var scale = rowH * 0.40 / span
 
-                        // Left column: stream / net / cha, and live amax right-aligned.
+                        // Left column: FDSN identity (net.station · channel), sensor
+                        // location, and live amax right-aligned.
                         ctx.fillStyle = "#111111"
                         ctx.font = "bold 11px sans-serif"
                         ctx.textAlign = "left"
-                        ctx.fillText(row.station, 11, mid)
-                        ctx.fillStyle = "#4f4f4f"
-                        ctx.font = "10px sans-serif"
-                        ctx.fillText(row.network, 84, mid)
-                        ctx.fillText(row.channel, 110, mid)
+                        ctx.fillText(row.network + "." + row.stationName, 11, mid)
+                        ctx.fillStyle = "#202020"
+                        ctx.font = "bold 10px monospace"
+                        ctx.fillText(row.channel, 108, mid)
+                        if (row.location) {
+                            ctx.fillStyle = "#8a8a8a"
+                            ctx.font = "9px sans-serif"
+                            ctx.fillText(String(row.location).slice(0, 16), 11, mid + 11)
+                        }
                         ctx.fillStyle = "#6f6f75"
                         ctx.font = "10px monospace"
                         ctx.textAlign = "right"

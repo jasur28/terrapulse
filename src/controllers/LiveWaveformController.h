@@ -87,6 +87,9 @@ private:
         double  rate = 0;
         double  lastAmp = 0;
         quint64 records = 0;
+        // Real FDSN identity from the miniSEED records (filled from the client).
+        QString net, sta, loc;
+        QString chan[3];         // channel code per component (HNZ / EHZ / ...)
         // Rolling window of the last windowMs of samples (triaxial, one shared time
         // deque). Worker-thread only; the envelope is decimated from this.
         std::deque<qint64> rt;

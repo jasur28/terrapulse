@@ -47,12 +47,25 @@ public:
     };
     using BatchFn = std::function<void(const std::vector<Triple>&)>;
 
+    // The FDSN identity of a stream as it appears in the miniSEED records — the real
+    // network/station/location and the 3-char channel per axis (e.g. HNZ / EHZ). Kept
+    // beside the data so consumers show the true identity, not a numeric placeholder.
+    struct StreamIdentity {
+        std::string net, sta, loc;
+        std::string chan[3];       // channel code per component (0/1/2)
+    };
+
     WaveformClient(QString host, quint16 port, QObject* parent = nullptr);
 
     // Per-sample sink (headless consumers). Called for every triple at the end of a
     // read. onBatch takes precedence when set (fewer cross-thread hops for the GUI).
     void onTriple(TripleFn fn) { m_onTriple = std::move(fn); }
     void onBatch(BatchFn fn)   { m_onBatch = std::move(fn); }
+
+    // Look up a stream's FDSN identity (populated as its records arrive). Returns
+    // false until at least one record of the stream has been decoded. Call from the
+    // reader's thread (same thread onBatch runs on).
+    bool identity(uint32_t object, uint32_t sensor, StreamIdentity& out) const;
     // Map "<network>_<station>" -> objectId so FDSN-named streams resolve to a
     // numeric object (sensor is the numeric location). Legacy numeric ids need
     // no map. See tp::loadStationMap.
@@ -72,7 +85,8 @@ private:
     void emitTriples(uint32_t object, uint32_t sensor);
 
     struct Axis { std::deque<std::pair<int64_t,int32_t>> q[3]; };  // per component
-    std::unordered_map<uint64_t, Axis> m_axes;                    // key = obj<<32|sen
+    std::unordered_map<uint64_t, Axis>          m_axes;           // key = obj<<32|sen
+    std::unordered_map<uint64_t, StreamIdentity> m_ids;           // real FDSN identity
 
     QString     m_host;
     quint16     m_port;

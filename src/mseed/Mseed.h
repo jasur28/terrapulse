@@ -38,6 +38,13 @@ bool resolveSourceId(const std::string& sid,
                      const std::unordered_map<std::string, uint32_t>& stationToObject,
                      uint32_t& object, uint32_t& sensor, int& component);
 
+// Parse the FDSN identity out of a source id: network, station, location and the
+// 3-char channel (band+instrument+orientation, e.g. "HNZ"/"EHZ"), plus the axis
+// component. This is the real identity carried in the miniSEED record, for display
+// and stream selection — no inventory map needed. Returns false on an unknown shape.
+bool splitIdentity(const std::string& sid, std::string& network, std::string& station,
+                   std::string& location, std::string& channel, int& component);
+
 // Each packed record is handed to the sink (bytes are only valid during the call).
 using RecordSink = std::function<void(const char* record, int length)>;
 

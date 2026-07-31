@@ -92,6 +92,26 @@ bool resolveSourceId(const std::string& sid,
     return true;
 }
 
+bool splitIdentity(const std::string& sid, std::string& network, std::string& station,
+                   std::string& location, std::string& channel, int& component) {
+    const std::size_t colon = sid.find(':');
+    const std::string body = colon == std::string::npos ? sid : sid.substr(colon + 1);
+    std::vector<std::string> f; std::string cur;
+    for (char c : body) { if (c == '_') { f.push_back(cur); cur.clear(); } else cur.push_back(c); }
+    f.push_back(cur);
+    if (f.size() < 6) return false;                 // net sta loc band inst orient
+    const char orient = f[5].empty() ? '?' : f[5][0];
+    switch (orient) {
+        case 'X': case 'x': case '1': component = 0; break;
+        case 'Y': case 'y': case 'N': case 'n': case '2': component = 1; break;
+        case 'Z': case 'z': case '3': component = 2; break;
+        default: return false;
+    }
+    network = f[0]; station = f[1]; location = f[2];
+    channel = f[3] + f[4] + f[5];                   // band + instrument + orientation
+    return true;
+}
+
 namespace {
 struct SinkCtx { const RecordSink* sink; };
 void recordHandler(char* record, int length, void* handlerdata) {

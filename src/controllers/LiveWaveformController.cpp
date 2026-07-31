@@ -71,6 +71,20 @@ void LiveWaveformController::ingestBatch(const std::vector<Triple>& batch) {
     for (const Triple& tr : batch) {
         Stream& s = m_map[(uint64_t(tr.object) << 32) | tr.sensor];
         s.object = tr.object; s.sensor = tr.sensor;
+
+        // Cache the stream's real FDSN identity from the client (once it is known).
+        if (m_client && (s.net.isEmpty() || s.chan[0].isEmpty()
+                         || s.chan[1].isEmpty() || s.chan[2].isEmpty())) {
+            tp::slink::WaveformClient::StreamIdentity id;
+            if (m_client->identity(tr.object, tr.sensor, id)) {
+                s.net = QString::fromStdString(id.net);
+                s.sta = QString::fromStdString(id.sta);
+                s.loc = QString::fromStdString(id.loc);
+                for (int c = 0; c < 3; ++c)
+                    if (!id.chan[c].empty()) s.chan[c] = QString::fromStdString(id.chan[c]);
+            }
+        }
+
         s.rt.push_back(tr.t);
         s.rx.push_back(static_cast<float>(tr.x));
         s.ry.push_back(static_cast<float>(tr.y));
@@ -158,7 +172,7 @@ QVariantList LiveWaveformController::buildEnvelopeList() const {
                 else { qmn.append(mn[a][b]); qmx.append(mx[a][b]); }
             }
             QVariantMap cm;
-            cm["channel"] = QString::fromLatin1(kChan[a]);
+            cm["channel"] = s.chan[a].isEmpty() ? QString::fromLatin1(kChan[a]) : s.chan[a];
             cm["mean"] = mean[a];
             cm["rms"]  = std::sqrt(sumSq[a] / used);
             cm["peak"] = peak[a];
@@ -168,13 +182,15 @@ QVariantList LiveWaveformController::buildEnvelopeList() const {
         }
 
         QVariantMap sm;
-        sm["object"]  = s.object;
-        sm["station"] = s.object;
-        sm["network"] = QStringLiteral("TP");
-        sm["sensor"]  = s.sensor;
-        sm["rate"]    = s.rate;
-        sm["cols"]    = cols;
-        sm["chans"]   = chans;
+        sm["object"]      = s.object;
+        sm["station"]     = s.object;                                    // numeric key (envIdx)
+        sm["network"]     = s.net.isEmpty() ? QStringLiteral("TP") : s.net;
+        sm["stationCode"] = s.sta.isEmpty() ? QString::number(s.object) : s.sta;
+        sm["location"]    = s.loc;
+        sm["sensor"]      = s.sensor;
+        sm["rate"]        = s.rate;
+        sm["cols"]        = cols;
+        sm["chans"]       = chans;
         out.append(sm);
     }
 
@@ -193,13 +209,18 @@ QVariantList LiveWaveformController::buildStreamList() const {
     for (const auto& kv : m_map) {
         const Stream& s = kv.second;
         QVariantMap m;
-        m["object"]  = s.object;
-        m["station"] = s.object;              // numeric id; net/sta strings are future work
-        m["network"] = QStringLiteral("TP");
-        m["sensor"]  = s.sensor;
-        m["rate"]    = s.rate;
-        m["records"] = static_cast<qulonglong>(s.records);
-        m["lastAmp"] = s.lastAmp;
+        m["object"]      = s.object;
+        m["station"]     = s.object;                                    // numeric key (envIdx)
+        m["network"]     = s.net.isEmpty() ? QStringLiteral("TP") : s.net;
+        m["stationCode"] = s.sta.isEmpty() ? QString::number(s.object) : s.sta;
+        m["location"]    = s.loc;
+        m["sensor"]      = s.sensor;
+        m["rate"]        = s.rate;
+        QVariantList chs;
+        for (int c = 0; c < 3; ++c) chs.append(s.chan[c]);
+        m["channels"]    = chs;
+        m["records"]     = static_cast<qulonglong>(s.records);
+        m["lastAmp"]     = s.lastAmp;
         list.append(m);
     }
     std::sort(list.begin(), list.end(), [](const QVariant& a, const QVariant& b) {
