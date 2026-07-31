@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 LiveWaveformController::LiveWaveformController(const QString& host, quint16 port,
                                               std::unordered_map<std::string, uint32_t> stationMap,
@@ -41,15 +42,29 @@ LiveWaveformController::~LiveWaveformController() = default;
 
 // Called from WaveformClient's reader (main thread): update per-stream state.
 // No emit here — flush() batches UI notifications at a fixed cadence.
+void LiveWaveformController::setViewport(int cols, double windowSecs) {
+    const int c = std::clamp(cols, 64, 4000);
+    const qint64 w = static_cast<qint64>(std::max(1.0, windowSecs) * 1000.0);
+    if (c == m_cols && w == m_windowMs) return;
+    m_cols = c; m_windowMs = w;
+}
+
 void LiveWaveformController::onTriple(uint32_t /*station*/, uint32_t object, uint32_t sensor,
                                       double x, double y, double z, int64_t tMs, double rate) {
     Stream& s = m_map[(uint64_t(object) << 32) | sensor];
     s.object = object; s.sensor = sensor;
 
-    // Accumulate the sample into the pending batch (keep the whole shape). flush()
-    // ships the batch and clears it; here we only append.
-    if (s.px.empty()) s.batchT0 = tMs;   // timestamp of the first sample of this batch
-    s.px.push_back(x); s.py.push_back(y); s.pz.push_back(z);
+    // Append to the rolling window (one time deque shared by the three axes) and
+    // trim anything older than the window (plus a small margin). The envelope is
+    // decimated from this ring in flush().
+    s.rt.push_back(tMs);
+    s.rx.push_back(static_cast<float>(x));
+    s.ry.push_back(static_cast<float>(y));
+    s.rz.push_back(static_cast<float>(z));
+    const qint64 cutoff = tMs - m_windowMs - 2000;
+    while (!s.rt.empty() && s.rt.front() < cutoff) {
+        s.rt.pop_front(); s.rx.pop_front(); s.ry.pop_front(); s.rz.pop_front();
+    }
 
     s.x = x; s.y = y; s.z = z; s.t = tMs;   // latest (tiles / last-value consumers)
     if (rate > 0) s.rate = rate;
@@ -58,47 +73,18 @@ void LiveWaveformController::onTriple(uint32_t /*station*/, uint32_t object, uin
     ++m_records;
     s.fresh = true;
     m_sinceLast.restart();
-
-    // Bound memory if the UI ever stalls between flushes: keep at most kMaxBatch
-    // pending, dropping the oldest and advancing t0 so the batch stays contiguous.
-    // flush() runs every 80 ms, so this cap is only a safety net.
-    constexpr std::size_t kMaxBatch = 8000;   // ~40 s @ 200 Hz
-    if (s.px.size() > kMaxBatch) {
-        const std::size_t drop = s.px.size() - kMaxBatch;
-        s.px.erase(s.px.begin(), s.px.begin() + drop);
-        s.py.erase(s.py.begin(), s.py.begin() + drop);
-        s.pz.erase(s.pz.begin(), s.pz.begin() + drop);
-        if (s.rate > 0) s.batchT0 += static_cast<qint64>(drop * 1000.0 / s.rate);
-    }
 }
 
 void LiveWaveformController::flush() {
     bool any = false;
     for (auto& kv : m_map) {
         Stream& s = kv.second;
-        if (!s.fresh || s.px.empty()) continue;
+        if (!s.fresh) continue;
         s.fresh = false;
         any = true;
 
-        // The whole pending batch — the waveform shape (all samples since last flush).
-        const int n = static_cast<int>(s.px.size());
-        QVariantList xs, ys, zs;
-        xs.reserve(n); ys.reserve(n); zs.reserve(n);
-        for (int i = 0; i < n; ++i) { xs.append(s.px[i]); ys.append(s.py[i]); zs.append(s.pz[i]); }
-
-        QVariantMap batch;
-        batch["station"] = s.object;              // station defaults to object (numeric id)
-        batch["object"]  = s.object;
-        batch["sensor"]  = s.sensor;
-        batch["rate"]    = s.rate > 0 ? s.rate : 200;
-        batch["t0"]      = static_cast<qlonglong>(s.batchT0);
-        batch["n"]       = n;
-        batch["xs"]      = xs;
-        batch["ys"]      = ys;
-        batch["zs"]      = zs;
-        emit batchReceived(batch);
-
-        // Latest single sample too — monitoring tiles still consume this shape.
+        // Latest single sample — monitoring tiles consume this. The trace view reads
+        // the decimated `envelopes` instead (built once below, not per sample).
         QVariantMap sample;
         sample["station"]     = s.object;
         sample["object"]      = s.object;
@@ -109,14 +95,100 @@ void LiveWaveformController::flush() {
         sample["y"]           = s.y;
         sample["z"]           = s.z;
         emit sampleReceived(sample);
-
-        s.px.clear(); s.py.clear(); s.pz.clear();
     }
     if (!any) return;
 
     if (!m_connected) { m_connected = true; m_state = "live"; emit stateChanged(); }
+    buildEnvelopes();
     rebuildStreams();
     emit statsChanged();
+}
+
+// Decimate each stream's rolling window to per-pixel columns the QML trace can draw
+// directly: for each of the three axes, a min[] and max[] over `m_cols` columns plus
+// the mean/rms/peak used to auto-scale. The O(N) decimation runs in C++ (not QML JS),
+// though still on the GUI thread — moving WaveformClient's socket+decode to a worker
+// thread (a RecordStreamThread analog) is the remaining step off the UI thread.
+void LiveWaveformController::buildEnvelopes() {
+    const int cols = std::max(1, m_cols);
+    QVariantList out;
+
+    for (auto& kv : m_map) {
+        Stream& s = kv.second;
+        if (s.rt.empty()) continue;
+        const qint64 tEnd = s.rt.back();
+        const qint64 tStart = tEnd - m_windowMs;
+        const double span = double(m_windowMs);
+
+        // Per-axis accumulators over the visible window.
+        const std::deque<float>* axes[3] = { &s.rx, &s.ry, &s.rz };
+        double sum[3] = {0,0,0}, sumSq[3] = {0,0,0}, peak[3] = {1e-9,1e-9,1e-9};
+        int used = 0;
+        std::vector<float> mn[3], mx[3];
+        for (int a = 0; a < 3; ++a) { mn[a].assign(cols, 1e30f); mx[a].assign(cols, -1e30f); }
+
+        // Pass 1: means (need the mean before the deviation stats).
+        for (std::size_t i = 0; i < s.rt.size(); ++i) {
+            if (s.rt[i] < tStart) continue;
+            ++used;
+            for (int a = 0; a < 3; ++a) sum[a] += (*axes[a])[i];
+        }
+        if (used == 0) continue;
+        const double mean[3] = { sum[0]/used, sum[1]/used, sum[2]/used };
+
+        // Pass 2: deviation stats + per-column min/max.
+        for (std::size_t i = 0; i < s.rt.size(); ++i) {
+            if (s.rt[i] < tStart) continue;
+            int b = int(double(s.rt[i] - tStart) / span * cols);
+            if (b < 0) b = 0; else if (b >= cols) b = cols - 1;
+            for (int a = 0; a < 3; ++a) {
+                const float v = (*axes[a])[i];
+                const double d = v - mean[a];
+                sumSq[a] += d * d;
+                const double ad = d < 0 ? -d : d;
+                if (ad > peak[a]) peak[a] = ad;
+                if (v < mn[a][b]) mn[a][b] = v;
+                if (v > mx[a][b]) mx[a][b] = v;
+            }
+        }
+
+        static const char* kChan[3] = { "HNX", "HNY", "HNZ" };
+        QVariantList chans;
+        for (int a = 0; a < 3; ++a) {
+            QVariantList qmn, qmx; qmn.reserve(cols); qmx.reserve(cols);
+            for (int b = 0; b < cols; ++b) {
+                if (mx[a][b] < mn[a][b]) { qmn.append(QVariant()); qmx.append(QVariant()); }
+                else { qmn.append(mn[a][b]); qmx.append(mx[a][b]); }
+            }
+            QVariantMap cm;
+            cm["channel"] = QString::fromLatin1(kChan[a]);
+            cm["mean"] = mean[a];
+            cm["rms"]  = std::sqrt(sumSq[a] / used);
+            cm["peak"] = peak[a];
+            cm["mn"]   = qmn;
+            cm["mx"]   = qmx;
+            chans.append(cm);
+        }
+
+        QVariantMap sm;
+        sm["object"]  = s.object;
+        sm["station"] = s.object;
+        sm["network"] = QStringLiteral("TP");
+        sm["sensor"]  = s.sensor;
+        sm["rate"]    = s.rate;
+        sm["cols"]    = cols;
+        sm["chans"]   = chans;
+        out.append(sm);
+    }
+
+    std::sort(out.begin(), out.end(), [](const QVariant& a, const QVariant& b) {
+        const QVariantMap ma = a.toMap(), mb = b.toMap();
+        if (ma["object"].toUInt() != mb["object"].toUInt())
+            return ma["object"].toUInt() < mb["object"].toUInt();
+        return ma["sensor"].toUInt() < mb["sensor"].toUInt();
+    });
+    m_envelopes = out;
+    emit envelopesChanged();
 }
 
 // The set of streams actually arriving over the backbone — this is what drives the

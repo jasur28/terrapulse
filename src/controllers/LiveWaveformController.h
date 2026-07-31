@@ -7,6 +7,7 @@
 #include <QString>
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -34,6 +35,10 @@ class LiveWaveformController : public QObject {
     Q_PROPERTY(QString      connectionState READ connectionState NOTIFY stateChanged)
     Q_PROPERTY(qulonglong   records         READ records         NOTIFY statsChanged)
     Q_PROPERTY(QVariantList streams         READ streams         NOTIFY streamsChanged)
+    // Per-stream decimated trace envelope, recomputed in C++ each flush so QML only
+    // draws ready pixel columns (min/max/mean) — never iterates raw samples. See
+    // envelopes() for the shape; setViewport() sets the pixel/second geometry.
+    Q_PROPERTY(QVariantList envelopes       READ envelopes       NOTIFY envelopesChanged)
 
 public:
     // host/port point at a tpslinkserver's SeedLink port (default 18000). port==0
@@ -50,20 +55,19 @@ public:
     QString      connectionState() const { return m_state; }
     qulonglong   records()         const { return m_records; }
     QVariantList streams()         const { return m_streams; }
+    QVariantList envelopes()       const { return m_envelopes; }
+
+    // The trace view tells us its plot width (pixels) and time span (seconds); the
+    // envelope is then decimated to exactly that many columns, so QML maps column i
+    // straight to pixel i with no resampling. Called when the view geometry changes.
+    Q_INVOKABLE void setViewport(int cols, double windowSecs);
 
 signals:
-    // A full batch of one stream's samples accumulated since the last flush — the
-    // whole waveform shape, not just the latest sample. This is the SEED record
-    // model the trace view needs: { object, station, sensor, rate, t0 (ms of the
-    // first sample), n, xs[], ys[], zs[] }; samples are evenly spaced at `rate`
-    // from t0. tprttv draws the full shape from this; without it the trace only ever
-    // saw ~12 Hz (one sample per flush) and the waveform collapsed.
-    void batchReceived(const QVariantMap& batch);
-
-    // One triaxial sample of one stream (latest of the batch): object, sensor,
-    // station, timestampMs, sampleRate, x, y, z. Kept for the monitoring tiles /
-    // last-value consumers that only need the newest reading, not the shape.
+    // One triaxial sample of one stream (the latest): object, sensor, station,
+    // timestampMs, sampleRate, x, y, z. Consumed by the monitoring tiles / last-
+    // value views. The trace view uses the decimated `envelopes` instead.
     void sampleReceived(const QVariantMap& sample);
+    void envelopesChanged();
     void stateChanged();
     void statsChanged();
     void streamsChanged();
@@ -81,16 +85,16 @@ private:
         double  lastAmp = 0;
         quint64 records = 0;
         bool    fresh = false;   // a new sample arrived since the last flush
-        // Pending batch since the last flush: the full waveform shape (not just the
-        // latest sample). Emitted whole by flush(), then cleared. batchT0 is the
-        // timestamp (ms) of the first pending sample; the rest follow at `rate`.
-        std::vector<double> px, py, pz;
-        qint64  batchT0 = 0;
+        // Rolling window of the last windowMs of samples (triaxial, one shared time
+        // deque). The decimated envelope is built from this each flush.
+        std::deque<qint64> rt;
+        std::deque<float>  rx, ry, rz;
     };
 
     void onTriple(uint32_t station, uint32_t object, uint32_t sensor,
                   double x, double y, double z, int64_t tMs, double rate);
     void rebuildStreams();
+    void buildEnvelopes();   // decimate each stream's ring to per-pixel min/max/mean
 
     std::unique_ptr<tp::slink::WaveformClient> m_client;
     std::unordered_map<uint64_t, Stream>       m_map;   // key = object<<32 | sensor
@@ -105,4 +109,9 @@ private:
     bool         m_connected = false;
     qulonglong   m_records   = 0;
     QVariantList m_streams;
+
+    // Trace viewport (set by QML) and the decimated envelope built from the rings.
+    int          m_cols     = 1000;      // pixel columns to decimate to
+    qint64       m_windowMs = 60000;     // visible time span
+    QVariantList m_envelopes;
 };

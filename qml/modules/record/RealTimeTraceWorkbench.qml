@@ -10,10 +10,8 @@ Item {
     property int activeTab: 0
     property bool manualAssociatorVisible: false
     property int maxRows: 80
-    // Real-time scope: keep just enough samples to fill the sliding window
-    // (60 s @ 200 Hz = 12000) so the trace occupies the full width instead of a
-    // sliver at the far left. maxPoints must cover windowSecs*rate.
-    property int maxPoints: 12000
+    // Visible time span. The trace itself is decimated in C++ (liveWaveform
+    // envelopes) — QML keeps no raw samples, only this window and the axis time.
     property real windowSecs: 60
     property real baseTime: -1
     property real latestRelT: 0
@@ -22,7 +20,6 @@ Item {
     // bursts over the network, so derive liveness from when a sample last arrived.
     property double lastSampleMs: 0
     property bool receiving: false
-    property var liveSeries: ({})
     property var picks: []
     property var artificialOrigin: ({ time: "", lat: "41.3111", lon: "69.2797", depth: "10" })
 
@@ -81,10 +78,6 @@ Item {
         return rows.filter(function(r) { return root.activeTab === 0 ? r.enabled : !r.enabled })
     }
 
-    function rowKey(row) {
-        return row.station + "." + row.sensor + "." + row.channel
-    }
-
     // Structural-health status of an object (drives the left status strip): from
     // the inventory warning level, not computed here — the UI only displays.
     function healthColor(objId) {
@@ -105,23 +98,6 @@ Item {
         if (t.indexOf("overload") >= 0) return "O"
         if (t.indexOf("vibr") >= 0) return "V"
         return "!"
-    }
-
-    function ensureSeries(key) {
-        if (root.liveSeries[key] === undefined) root.liveSeries[key] = []
-        return root.liveSeries[key]
-    }
-
-    function appendPoint(key, t, v) {
-        var series = ensureSeries(key)
-        series.push({ t: t, v: v })
-        while (series.length > root.maxPoints) series.shift()
-    }
-
-    function sampleValue(sample, component) {
-        if (component === "x") return sample.x || 0
-        if (component === "y") return sample.y || 0
-        return sample.z || 0
     }
 
     function addPick(t, label, associated) {
@@ -145,34 +121,13 @@ Item {
             // disconnect (connected can flip between record bursts over the network).
         }
 
-        // A whole batch of one stream's samples (the waveform shape). We append
-        // every sample at its real time (t0 + i/rate) so the trace shows full-rate
-        // detail — not the one-sample-per-flush the old sampleReceived path gave.
-        function onBatchReceived(batch) {
-            var n = batch.n
-            if (!n) return
-            var rate = batch.rate > 0 ? batch.rate : 200
-            var t0 = batch.t0 / 1000.0
-            var sta = String(batch.object !== undefined ? batch.object : batch.station)
-            var sen = String(batch.sensor !== undefined ? batch.sensor : 1)
-            var sx = ensureSeries(sta + "." + sen + ".HNX")
-            var sy = ensureSeries(sta + "." + sen + ".HNY")
-            var sz = ensureSeries(sta + "." + sen + ".HNZ")
-            var xs = batch.xs, ys = batch.ys, zs = batch.zs
-            var rel = root.latestRelT
-            for (var i = 0; i < n; i++) {
-                var t = t0 + i / rate
-                if (root.baseTime < 0) root.baseTime = t
-                rel = t - root.baseTime
-                sx.push({ t: rel, v: xs[i] || 0 })
-                sy.push({ t: rel, v: ys[i] || 0 })
-                sz.push({ t: rel, v: zs[i] || 0 })
-            }
-            var mp = root.maxPoints
-            while (sx.length > mp) sx.shift()
-            while (sy.length > mp) sy.shift()
-            while (sz.length > mp) sz.shift()
-            root.latestRelT = rel
+        // Latest sample drives the time axis and the live/waiting status. The trace
+        // itself is drawn from liveWaveform.envelopes (decimated in C++), read fresh
+        // in onPaint — so no raw samples are kept or iterated in QML.
+        function onSampleReceived(sample) {
+            var t = sample.timestampMs / 1000.0
+            if (root.baseTime < 0) root.baseTime = t
+            root.latestRelT = t - root.baseTime
             root.lastSampleMs = Date.now()
             if (!root.receiving) root.receiving = true
             root.dirty = true
@@ -311,6 +266,15 @@ Item {
                     var tStart = Math.max(0, tEnd - root.windowSecs)
                     var tRange = Math.max(1, tEnd - tStart)
 
+                    // Ask the controller to decimate to our current pixel width, then
+                    // index the ready envelopes by stream so each row can look up its
+                    // channel's min/max columns. All heavy work already happened in C++.
+                    liveWaveform.setViewport(Math.round(plotW), root.windowSecs)
+                    var envs = liveWaveform.envelopes
+                    var envIdx = {}
+                    for (var ei = 0; ei < envs.length; ei++)
+                        envIdx[String(envs[ei].station) + "." + String(envs[ei].sensor)] = envs[ei]
+
                     function tx(t) { return left + (t - tStart) / tRange * plotW }
                     function rowMid(i) { return top + i * rowH + rowH * 0.5 }
 
@@ -361,29 +325,24 @@ Item {
                         ctx.lineTo(left + plotW, y0 + rowH)
                         ctx.stroke()
 
-                        var key = root.rowKey(row)
-                        var series = root.liveSeries[key] || []
-                        var maxAbs = 1e-9
-                        var sum = 0
-                        var used = 0
-                        for (var p = 0; p < series.length; p++) {
-                            if (series[p].t < tStart) continue
-                            maxAbs = Math.max(maxAbs, Math.abs(series[p].v))
-                            sum += series[p].v
-                            used++
+                        // Look up this row's channel in the C++-built envelope.
+                        var envStream = envIdx[row.station + "." + row.sensor]
+                        var cd = null
+                        if (envStream) {
+                            var clist = envStream.chans
+                            for (var ci = 0; ci < clist.length; ci++)
+                                if (clist[ci].channel === row.channel) { cd = clist[ci]; break }
                         }
-                        var mean = used > 0 ? sum / used : 0
-                        // Auto-scale by the peak deviation from the mean, not the
-                        // absolute peak: a channel with a large DC offset (raw ADC
-                        // counts) must still fill its row, not collapse to a line.
-                        var maxDev = 1e-9
-                        for (var q = 0; q < series.length; q++) {
-                            if (series[q].t < tStart) continue
-                            maxDev = Math.max(maxDev, Math.abs(series[q].v - mean))
-                        }
-                        var scale = rowH * 0.40 / maxDev
+                        var mean = cd ? cd.mean : 0
+                        var peak = cd ? cd.peak : 1e-9
+                        var rms  = cd ? cd.rms : 0
+                        // Robust auto-scale: fill the row at ~4x RMS, never past the true
+                        // peak; a lone spike clips (samples are clamped to the row band).
+                        var span = rms > 0 ? Math.min(peak, 4 * rms) : peak
+                        if (span < 1e-9) span = 1e-9
+                        var scale = rowH * 0.40 / span
 
-                        // Left column: stream / net / cha, and live amax (gal) right-aligned.
+                        // Left column: stream / net / cha, and live amax right-aligned.
                         ctx.fillStyle = "#111111"
                         ctx.font = "bold 11px sans-serif"
                         ctx.textAlign = "left"
@@ -395,46 +354,45 @@ Item {
                         ctx.fillStyle = "#6f6f75"
                         ctx.font = "10px monospace"
                         ctx.textAlign = "right"
-                        ctx.fillText("amax " + maxAbs.toExponential(1), left - 6, mid - 6)
+                        ctx.fillText("amax " + peak.toExponential(1), left - 6, mid - 6)
                         ctx.fillText("mean " + mean.toExponential(1), left - 6, mid + 7)
                         ctx.textAlign = "left"
 
-                        // Decimate to the pixel grid: one column per screen pixel,
-                        // tracking min/max (the amplitude envelope) and a running mean
-                        // (the connecting line). Cost is bounded by width, not by the
-                        // sample count — so a full-rate 200 Hz batch stays cheap. This
-                        // is the scrttv-style render: dense signal fills the row as a
-                        // min..max band; sparse streams still connect via the mean line.
-                        var cols = {}
-                        var order = []
-                        for (var s = 0; s < series.length; s++) {
-                            if (series[s].t < tStart || series[s].t > tEnd) continue
-                            var sx = left + (series[s].t - tStart) / tRange * plotW
-                            var sy = mid - (series[s].v - mean) * scale
-                            var col = Math.round(sx)
-                            var c = cols[col]
-                            if (c === undefined) { cols[col] = { min: sy, max: sy, sum: sy, n: 1 }; order.push(col) }
-                            else { c.n++; c.sum += sy; if (sy < c.min) c.min = sy; if (sy > c.max) c.max = sy }
-                        }
-                        order.sort(function(a, b) { return a - b })
-
-                        ctx.strokeStyle = row.color
-                        ctx.lineWidth = 1
-                        // amplitude envelope: vertical min..max bar per column
-                        ctx.beginPath()
-                        for (var e = 0; e < order.length; e++) {
-                            var ec = cols[order[e]]
-                            if (ec.max - ec.min >= 1) { ctx.moveTo(order[e], ec.min); ctx.lineTo(order[e], ec.max) }
-                        }
-                        ctx.stroke()
-                        // connecting line through column means (continuity + sparse streams)
-                        if (order.length > 0) {
+                        // Draw the C++-decimated columns: a min..max bar per pixel plus a
+                        // mean line. The controller already reduced the window to `cols`
+                        // columns, so there is no raw-sample iteration here.
+                        if (cd) {
+                            var yTop = mid - rowH * 0.5 + 1
+                            var yBot = mid + rowH * 0.5 - 1
+                            var mnA = cd.mn, mxA = cd.mx
+                            var ncol = mnA.length
+                            var colW = plotW / ncol
+                            ctx.strokeStyle = row.color
+                            ctx.lineWidth = 1
                             ctx.beginPath()
-                            for (var k = 0; k < order.length; k++) {
-                                var mc = cols[order[k]].sum / cols[order[k]].n
-                                if (k === 0) ctx.moveTo(order[k], mc); else ctx.lineTo(order[k], mc)
+                            for (var b = 0; b < ncol; b++) {
+                                var lo = mnA[b]
+                                if (lo === undefined || lo === null) continue
+                                var xb = left + b * colW
+                                var yhi = mid - (mxA[b] - mean) * scale
+                                var ylo = mid - (lo - mean) * scale
+                                if (yhi < yTop) yhi = yTop; else if (yhi > yBot) yhi = yBot
+                                if (ylo < yTop) ylo = yTop; else if (ylo > yBot) ylo = yBot
+                                ctx.moveTo(xb, yhi); ctx.lineTo(xb, ylo)
                             }
                             ctx.stroke()
+                            ctx.beginPath()
+                            var started = false
+                            for (var b2 = 0; b2 < ncol; b2++) {
+                                var lo2 = mnA[b2]
+                                if (lo2 === undefined || lo2 === null) continue
+                                var mv = (lo2 + mxA[b2]) * 0.5
+                                var xm = left + b2 * colW
+                                var ym = mid - (mv - mean) * scale
+                                if (ym < yTop) ym = yTop; else if (ym > yBot) ym = yBot
+                                if (!started) { ctx.moveTo(xm, ym); started = true } else ctx.lineTo(xm, ym)
+                            }
+                            if (started) ctx.stroke()
                         }
 
                         ctx.strokeStyle = "#9a9a9a"
