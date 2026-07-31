@@ -38,9 +38,17 @@ void WaveformClient::connectAndHandshake() {
         return m_sock->readAll();
     };
     cmd("HELLO");
+    auto sendSelectors = [&]() {
+        for (const QString& sel : m_selectors) {
+            const QString s = sel.trimmed();
+            if (!s.isEmpty()) cmd(("SELECT " + s).toLatin1());
+        }
+    };
     // Station selection (multi-station SeedLink): register each requested station
-    // before DATA so several consumers can split the network. No STATION at all =
-    // the server streams every channel (uni-station), the default.
+    // before DATA so several consumers can split the network. SELECT applies to the
+    // MOST RECENT station, so the selectors must follow EACH STATION — not once at the
+    // end, which would filter only the last one. No STATION at all = uni-station: the
+    // selectors (if any) are global, sent once before DATA.
     for (const QString& spec : m_stations) {
         QString net = QStringLiteral("TP"), sta = spec.trimmed();
         int sep = sta.indexOf('_');
@@ -48,13 +56,9 @@ void WaveformClient::connectAndHandshake() {
         if (sep >= 0) { net = sta.left(sep); sta = sta.mid(sep + 1); }
         if (sta.isEmpty()) continue;
         cmd(("STATION " + sta + " " + net).toLatin1());
+        sendSelectors();                 // scope selectors to THIS station
     }
-    // Channel selectors (SELECT), applied after STATION and before DATA. Restricts
-    // the stream to matching channels so we don't pull the whole network.
-    for (const QString& sel : m_selectors) {
-        const QString s = sel.trimmed();
-        if (!s.isEmpty()) cmd(("SELECT " + s).toLatin1());
-    }
+    if (m_stations.isEmpty()) sendSelectors();   // uni-station: global selectors
     QByteArray dataCmd = "DATA";
     if (m_haveSeq) {
         const quint32 next = (m_lastSeq + 1) & 0xFFFFFF;

@@ -665,6 +665,12 @@ def exec_one(root, name, args):
             inv = params.get("inventory", "config/inventory.example.json")
             if inv:
                 argv += ["--inventory", inv]
+        # Subscription subset from the role config, so the operator need not type it
+        # (SeisComp reads this from bindings). CLI args still override.
+        if "--stations" not in args and params.get("stations"):
+            argv += ["--stations", str(params["stations"])]
+        if "--select" not in args and params.get("select"):
+            argv += ["--select", str(params["select"])]
     argv += args
     if IS_WIN:
         raise SystemExit(subprocess.call(argv))
