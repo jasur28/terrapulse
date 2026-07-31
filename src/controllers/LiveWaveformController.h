@@ -1,5 +1,6 @@
 #pragma once
 #include <QObject>
+#include <QThread>
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QVariantList>
@@ -96,6 +97,7 @@ private:
     void rebuildStreams();
     void buildEnvelopes();   // decimate each stream's ring to per-pixel min/max/mean
 
+    QThread                                    m_thread;   // runs m_client's socket+decode
     std::unique_ptr<tp::slink::WaveformClient> m_client;
     std::unordered_map<uint64_t, Stream>       m_map;   // key = object<<32 | sensor
 

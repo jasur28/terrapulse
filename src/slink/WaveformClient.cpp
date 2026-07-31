@@ -7,32 +7,35 @@
 
 namespace tp::slink {
 
-WaveformClient::WaveformClient(QString host, quint16 port)
-    : m_host(std::move(host)), m_port(port) {}
+WaveformClient::WaveformClient(QString host, quint16 port, QObject* parent)
+    : QObject(parent), m_host(std::move(host)), m_port(port),
+      m_sock(new QTcpSocket(this)) {}
 
 void WaveformClient::start() { connectAndHandshake(); }
 
 void WaveformClient::scheduleReconnect() {
-    QTimer::singleShot(2000, [this]() { connectAndHandshake(); });
+    // Context object `this`: if the client is destroyed while the timer is pending,
+    // Qt cancels the callback instead of firing it on a dangling this.
+    QTimer::singleShot(2000, this, [this]() { connectAndHandshake(); });
 }
 
 // Blocking handshake with signals suppressed, then hand over to the async reader.
 // Resumes with DATA <seq+1> so a dropped link does not lose the outage gap.
 void WaveformClient::connectAndHandshake() {
     m_buf.clear();
-    m_sock.blockSignals(true);
-    m_sock.abort();
-    m_sock.connectToHost(m_host, m_port);
-    if (!m_sock.waitForConnected(5000)) {
+    m_sock->blockSignals(true);
+    m_sock->abort();
+    m_sock->connectToHost(m_host, m_port);
+    if (!m_sock->waitForConnected(5000)) {
         std::fprintf(stderr, "[waveform] cannot connect to %s:%u\n",
                      m_host.toUtf8().constData(), m_port);
-        m_sock.blockSignals(false); scheduleReconnect(); return;
+        m_sock->blockSignals(false); scheduleReconnect(); return;
     }
 
     auto cmd = [&](const QByteArray& c) {
-        m_sock.write(c + "\r\n"); m_sock.flush();
-        m_sock.waitForReadyRead(3000);
-        return m_sock.readAll();
+        m_sock->write(c + "\r\n"); m_sock->flush();
+        m_sock->waitForReadyRead(3000);
+        return m_sock->readAll();
     };
     cmd("HELLO");
     // Station selection (multi-station SeedLink): register each requested station
@@ -54,20 +57,20 @@ void WaveformClient::connectAndHandshake() {
     if (!cmd(dataCmd).startsWith("OK")) {
         std::fprintf(stderr, "[waveform] DATA rejected by %s:%u\n",
                      m_host.toUtf8().constData(), m_port);
-        m_sock.blockSignals(false); scheduleReconnect(); return;
+        m_sock->blockSignals(false); scheduleReconnect(); return;
     }
-    m_sock.blockSignals(false);
+    m_sock->blockSignals(false);
 
     if (!m_wired) {
-        QObject::connect(&m_sock, &QTcpSocket::readyRead,    [this]() { onReadyRead(); });
-        QObject::connect(&m_sock, &QTcpSocket::disconnected, [this]() { scheduleReconnect(); });
+        QObject::connect(m_sock, &QTcpSocket::readyRead,    [this]() { onReadyRead(); });
+        QObject::connect(m_sock, &QTcpSocket::disconnected, [this]() { scheduleReconnect(); });
         m_wired = true;
     }
-    QTimer::singleShot(0, [this]() { onReadyRead(); });   // drain anything buffered
+    QTimer::singleShot(0, this, [this]() { onReadyRead(); });   // drain anything buffered
 }
 
 void WaveformClient::onReadyRead() {
-    m_buf += m_sock.readAll();
+    m_buf += m_sock->readAll();
     while (m_buf.size() >= kPacketSize) {
         if (m_buf[0] != 'S' || m_buf[1] != 'L') { m_buf.remove(0, 1); continue; }
         bool okHex = false;
@@ -94,6 +97,17 @@ void WaveformClient::onReadyRead() {
             emitTriples(obj, sen);
         }
     }
+
+    // Deliver everything decoded in this read at once: a single batch to onBatch
+    // (one cross-thread hop for the threaded GUI, not one per sample) or, if no
+    // batch sink is set, per-sample to onTriple for headless consumers.
+    if (!m_pending.empty()) {
+        if (m_onBatch) m_onBatch(m_pending);
+        else if (m_onTriple)
+            for (const Triple& tr : m_pending)
+                m_onTriple(tr.station, tr.object, tr.sensor, tr.x, tr.y, tr.z, tr.t, tr.rate);
+        m_pending.clear();
+    }
 }
 
 // Re-interleave the three per-component queues of one sensor into triaxial
@@ -111,12 +125,11 @@ void WaveformClient::emitTriples(uint32_t object, uint32_t sensor) {
             if (tz < tmax - tol) Z.pop_front();
             continue;
         }
-        if (m_onTriple)
-            m_onTriple(object, object, sensor,          // station defaults to object
-                       X.front().second / 10000.0,
-                       Y.front().second / 10000.0,
-                       Z.front().second / 10000.0,
-                       tx, m_lastRate);
+        m_pending.push_back({ object, object, sensor,   // station defaults to object
+                              X.front().second / 10000.0,
+                              Y.front().second / 10000.0,
+                              Z.front().second / 10000.0,
+                              tx, m_lastRate });
         X.pop_front(); Y.pop_front(); Z.pop_front();
     }
 }

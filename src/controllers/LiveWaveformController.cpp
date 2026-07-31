@@ -18,14 +18,27 @@ LiveWaveformController::LiveWaveformController(const QString& host, quint16 port
 
     m_client = std::make_unique<tp::slink::WaveformClient>(host, port);
     m_client->setStationMap(std::move(stationMap));
-    m_client->onTriple([this](uint32_t sta, uint32_t obj, uint32_t sen,
-                              double x, double y, double z, int64_t t, double rate) {
-        onTriple(sta, obj, sen, x, y, z, t, rate);
+    // The batch sink fires on the worker thread (below), once per network read,
+    // where decode/interleave run. Copy the batch and marshal ONE queued event back
+    // to THIS object's thread — not one per sample — so onTriple()/flush() touch the
+    // rings from one thread only (no locks) and the GUI sees few cross-thread hops
+    // even with many sensors.
+    m_client->onBatch([this](const std::vector<tp::slink::WaveformClient::Triple>& batch) {
+        auto copy = std::make_shared<std::vector<tp::slink::WaveformClient::Triple>>(batch);
+        QMetaObject::invokeMethod(this, [this, copy]() {
+            for (const auto& tr : *copy)
+                onTriple(tr.station, tr.object, tr.sensor, tr.x, tr.y, tr.z, tr.t, tr.rate);
+        }, Qt::QueuedConnection);
     });
 
-    // Decimate for the canvas: emit each stream's newest sample ~12×/s. The trace
-    // ring keeps far fewer points than full rate, so one point per stream per tick
-    // is plenty and keeps the UI responsive under many streams.
+    // Run the SeedLink socket, the (blocking) handshake and the miniSEED decode on a
+    // worker thread — a RecordStreamThread analog — so none of it touches the UI
+    // event loop. The client's QTcpSocket is its child, so it moves along.
+    m_client->moveToThread(&m_thread);
+    m_thread.start();
+
+    // flush() and checkLiveness() run on THIS (GUI) thread, draining the rings the
+    // worker fills. flush cadence unchanged.
     connect(&m_flushTimer, &QTimer::timeout, this, &LiveWaveformController::flush);
     m_flushTimer.start(80);
 
@@ -33,12 +46,27 @@ LiveWaveformController::LiveWaveformController(const QString& host, quint16 port
     m_liveTimer.start(1000);
     m_sinceLast.start();
 
-    // Defer the (briefly blocking) connect+handshake so the window paints first;
-    // if the backbone is down this only delays the reader, not the whole UI.
-    QTimer::singleShot(300, this, [this]() { if (m_client) m_client->start(); });
+    // Start the client inside its own thread, deferred so the window paints first;
+    // the blocking connect+handshake now delays only the worker, never the UI.
+    QTimer::singleShot(300, this, [this]() {
+        tp::slink::WaveformClient* c = m_client.get();
+        if (c) QMetaObject::invokeMethod(c, [c]() { c->start(); }, Qt::QueuedConnection);
+    });
 }
 
-LiveWaveformController::~LiveWaveformController() = default;
+LiveWaveformController::~LiveWaveformController() {
+    if (m_thread.isRunning()) {
+        // Delete the client inside its own thread (correct affinity), then stop the
+        // thread. BlockingQueued waits for the delete; the worker's loop is still
+        // running, so there is no deadlock.
+        if (m_client) {
+            tp::slink::WaveformClient* c = m_client.release();
+            QMetaObject::invokeMethod(c, [c]() { delete c; }, Qt::BlockingQueuedConnection);
+        }
+        m_thread.quit();
+        m_thread.wait();
+    }
+}
 
 // Called from WaveformClient's reader (main thread): update per-stream state.
 // No emit here — flush() batches UI notifications at a fixed cadence.
