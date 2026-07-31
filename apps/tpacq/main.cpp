@@ -52,7 +52,10 @@ struct Config {
     // empty keeps the legacy numeric id, so existing setups are unchanged.
     QString network = "TP", stationCode, kind = "accelerometer";
     double  cornerPeriod = 1e9;   // >=10 s => broadband band code (accelerometer)
-    int     recordSamples = 1000; // miniSEED buffer before flush (fill vs latency)
+    int     recordSamples = 1000; // archive miniSEED record fill (fill vs disk overhead)
+    int     feedSamples = 100;    // live-feed record fill: smaller = lower latency, so
+                                  // the GUI gets a fresh record ~2×/s (100 @ 200 Hz),
+                                  // not one 5 s burst (1000). Decoupled from the archive.
     int     batch = 20;           // bus samples per message (1 = per-sample)
     QString slinkHost;            // --slink host:port: push miniSEED records to a
     quint16 slinkPort = 0;        // tpslinkserver feed (waveform backbone, no bus)
@@ -271,7 +274,10 @@ private:
             c.rate = rate; c.startMs = t;
         }
         c.buf.push_back(v);
-        if (int(c.buf.size()) >= m_cfg.recordSamples) flushFeedChan(c);
+        // Flush the live feed on the small feed-record size (low latency), not the
+        // large archive record size — otherwise the GUI only sees one burst per
+        // ~5 s and its liveness flips to "waiting" between bursts.
+        if (int(c.buf.size()) >= m_cfg.feedSamples) flushFeedChan(c);
     }
 
     // Encode a full window into records and QUEUE them in the backlog. Records
@@ -477,7 +483,8 @@ int main(int argc, char* argv[]) {
     QCommandLineOption staCodeOpt("station-code","FDSN station code (<=5 chars); enables FDSN archive naming", "code");
     QCommandLineOption kindOpt   ("kind",       "Instrument: accelerometer | seismometer", "kind", "accelerometer");
     QCommandLineOption cornerOpt ("corner",     "Sensor corner period (s); >=10 => broadband band code", "sec", "1e9");
-    QCommandLineOption recSampOpt("record-samples","miniSEED samples buffered before flush (fill vs latency)", "n", "1000");
+    QCommandLineOption recSampOpt("record-samples","archive miniSEED record fill (fill vs disk overhead)", "n", "1000");
+    QCommandLineOption feedSampOpt("feed-samples","live-feed record fill: smaller = lower latency (100 @ 200 Hz ~= 2 records/s)", "n", "100");
     QCommandLineOption batchOpt  ("batch",       "Bus samples per message (cuts message rate; 1 = per-sample)", "n", "20");
     QCommandLineOption slinkOpt  ("slink",       "Push miniSEED records to a tpslinkserver feed host:port "
                                   "(waveform backbone, no broker)", "host:port", "");
@@ -487,7 +494,7 @@ int main(int argc, char* argv[]) {
                                   "before the oldest are dropped", "n", "20000");
     parser.addOptions({portOpt, masterOpt, queueOpt, simOpt, simEventsOpt, rateOpt, replayOpt, historicOpt,
                        speedOpt, recordOpt, archiveOpt, bufferOpt, baudOpt, stationOpt, objectOpt, sensorOpt,
-                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt, batchOpt, slinkOpt, noBusOpt, backlogOpt});
+                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt, feedSampOpt, batchOpt, slinkOpt, noBusOpt, backlogOpt});
     parser.process(app);
 
     Config cfg;
@@ -499,6 +506,7 @@ int main(int argc, char* argv[]) {
     cfg.kind        = parser.value(kindOpt);
     cfg.cornerPeriod= parser.value(cornerOpt).toDouble();
     cfg.recordSamples = std::max(8, parser.value(recSampOpt).toInt());
+    cfg.feedSamples   = std::max(8, parser.value(feedSampOpt).toInt());
     cfg.batch         = std::max(1, parser.value(batchOpt).toInt());
     if (const QString sl = parser.value(slinkOpt); !sl.isEmpty()) {
         const int colon = sl.lastIndexOf(':');

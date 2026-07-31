@@ -45,25 +45,62 @@ void LiveWaveformController::onTriple(uint32_t /*station*/, uint32_t object, uin
                                       double x, double y, double z, int64_t tMs, double rate) {
     Stream& s = m_map[(uint64_t(object) << 32) | sensor];
     s.object = object; s.sensor = sensor;
-    s.x = x; s.y = y; s.z = z; s.t = tMs;
+
+    // Accumulate the sample into the pending batch (keep the whole shape). flush()
+    // ships the batch and clears it; here we only append.
+    if (s.px.empty()) s.batchT0 = tMs;   // timestamp of the first sample of this batch
+    s.px.push_back(x); s.py.push_back(y); s.pz.push_back(z);
+
+    s.x = x; s.y = y; s.z = z; s.t = tMs;   // latest (tiles / last-value consumers)
     if (rate > 0) s.rate = rate;
     s.lastAmp = std::max({std::fabs(x), std::fabs(y), std::fabs(z)});
     ++s.records;
     ++m_records;
     s.fresh = true;
     m_sinceLast.restart();
+
+    // Bound memory if the UI ever stalls between flushes: keep at most kMaxBatch
+    // pending, dropping the oldest and advancing t0 so the batch stays contiguous.
+    // flush() runs every 80 ms, so this cap is only a safety net.
+    constexpr std::size_t kMaxBatch = 8000;   // ~40 s @ 200 Hz
+    if (s.px.size() > kMaxBatch) {
+        const std::size_t drop = s.px.size() - kMaxBatch;
+        s.px.erase(s.px.begin(), s.px.begin() + drop);
+        s.py.erase(s.py.begin(), s.py.begin() + drop);
+        s.pz.erase(s.pz.begin(), s.pz.begin() + drop);
+        if (s.rate > 0) s.batchT0 += static_cast<qint64>(drop * 1000.0 / s.rate);
+    }
 }
 
 void LiveWaveformController::flush() {
     bool any = false;
     for (auto& kv : m_map) {
         Stream& s = kv.second;
-        if (!s.fresh) continue;
+        if (!s.fresh || s.px.empty()) continue;
         s.fresh = false;
         any = true;
 
+        // The whole pending batch — the waveform shape (all samples since last flush).
+        const int n = static_cast<int>(s.px.size());
+        QVariantList xs, ys, zs;
+        xs.reserve(n); ys.reserve(n); zs.reserve(n);
+        for (int i = 0; i < n; ++i) { xs.append(s.px[i]); ys.append(s.py[i]); zs.append(s.pz[i]); }
+
+        QVariantMap batch;
+        batch["station"] = s.object;              // station defaults to object (numeric id)
+        batch["object"]  = s.object;
+        batch["sensor"]  = s.sensor;
+        batch["rate"]    = s.rate > 0 ? s.rate : 200;
+        batch["t0"]      = static_cast<qlonglong>(s.batchT0);
+        batch["n"]       = n;
+        batch["xs"]      = xs;
+        batch["ys"]      = ys;
+        batch["zs"]      = zs;
+        emit batchReceived(batch);
+
+        // Latest single sample too — monitoring tiles still consume this shape.
         QVariantMap sample;
-        sample["station"]     = s.object;   // station defaults to object (numeric id)
+        sample["station"]     = s.object;
         sample["object"]      = s.object;
         sample["sensor"]      = s.sensor;
         sample["timestampMs"] = static_cast<qlonglong>(s.t);
@@ -72,6 +109,8 @@ void LiveWaveformController::flush() {
         sample["y"]           = s.y;
         sample["z"]           = s.z;
         emit sampleReceived(sample);
+
+        s.px.clear(); s.py.clear(); s.pz.clear();
     }
     if (!any) return;
 

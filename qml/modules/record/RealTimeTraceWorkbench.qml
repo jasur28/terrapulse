@@ -10,11 +10,18 @@ Item {
     property int activeTab: 0
     property bool manualAssociatorVisible: false
     property int maxRows: 80
-    property int maxPoints: 6000
-    property real windowSecs: 900
+    // Real-time scope: keep just enough samples to fill the sliding window
+    // (60 s @ 200 Hz = 12000) so the trace occupies the full width instead of a
+    // sliver at the far left. maxPoints must cover windowSecs*rate.
+    property int maxPoints: 12000
+    property real windowSecs: 60
     property real baseTime: -1
     property real latestRelT: 0
     property bool dirty: false
+    // Debounced "receiving" flag: liveWaveform.connected flickers between record
+    // bursts over the network, so derive liveness from when a sample last arrived.
+    property double lastSampleMs: 0
+    property bool receiving: false
     property var liveSeries: ({})
     property var picks: []
     property var artificialOrigin: ({ time: "", lat: "41.3111", lon: "69.2797", depth: "10" })
@@ -138,16 +145,36 @@ Item {
             // disconnect (connected can flip between record bursts over the network).
         }
 
-        function onSampleReceived(sample) {
-            var t = sample.timestampMs / 1000.0
-            if (root.baseTime < 0) root.baseTime = t
-            root.latestRelT = t - root.baseTime
-
-            var sta = String(sample.object !== undefined ? sample.object : sample.station)
-            var sen = String(sample.sensor !== undefined ? sample.sensor : 1)
-            appendPoint(sta + "." + sen + ".HNX", root.latestRelT, sample.x || 0)
-            appendPoint(sta + "." + sen + ".HNY", root.latestRelT, sample.y || 0)
-            appendPoint(sta + "." + sen + ".HNZ", root.latestRelT, sample.z || 0)
+        // A whole batch of one stream's samples (the waveform shape). We append
+        // every sample at its real time (t0 + i/rate) so the trace shows full-rate
+        // detail — not the one-sample-per-flush the old sampleReceived path gave.
+        function onBatchReceived(batch) {
+            var n = batch.n
+            if (!n) return
+            var rate = batch.rate > 0 ? batch.rate : 200
+            var t0 = batch.t0 / 1000.0
+            var sta = String(batch.object !== undefined ? batch.object : batch.station)
+            var sen = String(batch.sensor !== undefined ? batch.sensor : 1)
+            var sx = ensureSeries(sta + "." + sen + ".HNX")
+            var sy = ensureSeries(sta + "." + sen + ".HNY")
+            var sz = ensureSeries(sta + "." + sen + ".HNZ")
+            var xs = batch.xs, ys = batch.ys, zs = batch.zs
+            var rel = root.latestRelT
+            for (var i = 0; i < n; i++) {
+                var t = t0 + i / rate
+                if (root.baseTime < 0) root.baseTime = t
+                rel = t - root.baseTime
+                sx.push({ t: rel, v: xs[i] || 0 })
+                sy.push({ t: rel, v: ys[i] || 0 })
+                sz.push({ t: rel, v: zs[i] || 0 })
+            }
+            var mp = root.maxPoints
+            while (sx.length > mp) sx.shift()
+            while (sy.length > mp) sy.shift()
+            while (sz.length > mp) sz.shift()
+            root.latestRelT = rel
+            root.lastSampleMs = Date.now()
+            if (!root.receiving) root.receiving = true
             root.dirty = true
         }
     }
@@ -172,6 +199,10 @@ Item {
         running: root.visible
         repeat: true
         onTriggered: {
+            // Debounce the live/waiting status: still "receiving" if a sample
+            // arrived within the last 1.5 s, regardless of connected flicker.
+            var live = (Date.now() - root.lastSampleMs) < 1500
+            if (root.receiving !== live) root.receiving = live
             if (!root.dirty) return
             root.dirty = false
             canvas.requestPaint()
@@ -237,9 +268,9 @@ Item {
                 Item { Layout.fillWidth: true }
 
                 Text {
-                    text: liveWaveform.connected ? "LIVE  " + liveWaveform.endpoint
+                    text: root.receiving ? "LIVE  " + liveWaveform.endpoint
                           : (liveWaveform.endpoint !== "" ? "Waiting for records  " + liveWaveform.endpoint : "No SeedLink backbone")
-                    color: liveWaveform.connected ? "#126b22" : "#777777"
+                    color: root.receiving ? "#126b22" : "#777777"
                     font.pixelSize: 12
                 }
             }
@@ -342,7 +373,15 @@ Item {
                             used++
                         }
                         var mean = used > 0 ? sum / used : 0
-                        var scale = rowH * 0.40 / Math.max(maxAbs, 1)
+                        // Auto-scale by the peak deviation from the mean, not the
+                        // absolute peak: a channel with a large DC offset (raw ADC
+                        // counts) must still fill its row, not collapse to a line.
+                        var maxDev = 1e-9
+                        for (var q = 0; q < series.length; q++) {
+                            if (series[q].t < tStart) continue
+                            maxDev = Math.max(maxDev, Math.abs(series[q].v - mean))
+                        }
+                        var scale = rowH * 0.40 / maxDev
 
                         // Left column: stream / net / cha, and live amax (gal) right-aligned.
                         ctx.fillStyle = "#111111"
@@ -360,34 +399,43 @@ Item {
                         ctx.fillText("mean " + mean.toExponential(1), left - 6, mid + 7)
                         ctx.textAlign = "left"
 
-                        // Display decimation: one vertical min/max segment per pixel.
-                        // This keeps the operator view fast with many sensors and long windows.
-                        var buckets = []
+                        // Decimate to the pixel grid: one column per screen pixel,
+                        // tracking min/max (the amplitude envelope) and a running mean
+                        // (the connecting line). Cost is bounded by width, not by the
+                        // sample count — so a full-rate 200 Hz batch stays cheap. This
+                        // is the scrttv-style render: dense signal fills the row as a
+                        // min..max band; sparse streams still connect via the mean line.
+                        var cols = {}
+                        var order = []
                         for (var s = 0; s < series.length; s++) {
                             if (series[s].t < tStart || series[s].t > tEnd) continue
-                            var bx = Math.floor((series[s].t - tStart) / tRange * plotW)
-                            if (bx < 0 || bx >= plotW) continue
-                            var by = mid - (series[s].v - mean) * scale
-                            var b = buckets[bx]
-                            if (b === undefined) buckets[bx] = { min: by, max: by }
-                            else {
-                                if (by < b.min) b.min = by
-                                if (by > b.max) b.max = by
-                            }
+                            var sx = left + (series[s].t - tStart) / tRange * plotW
+                            var sy = mid - (series[s].v - mean) * scale
+                            var col = Math.round(sx)
+                            var c = cols[col]
+                            if (c === undefined) { cols[col] = { min: sy, max: sy, sum: sy, n: 1 }; order.push(col) }
+                            else { c.n++; c.sum += sy; if (sy < c.min) c.min = sy; if (sy > c.max) c.max = sy }
                         }
+                        order.sort(function(a, b) { return a - b })
+
                         ctx.strokeStyle = row.color
                         ctx.lineWidth = 1
+                        // amplitude envelope: vertical min..max bar per column
                         ctx.beginPath()
-                        var any = false
-                        for (var bx2 = 0; bx2 < buckets.length; bx2++) {
-                            var bb = buckets[bx2]
-                            if (bb === undefined) continue
-                            var xx = left + bx2
-                            ctx.moveTo(xx, bb.min)
-                            ctx.lineTo(xx, bb.max)
-                            any = true
+                        for (var e = 0; e < order.length; e++) {
+                            var ec = cols[order[e]]
+                            if (ec.max - ec.min >= 1) { ctx.moveTo(order[e], ec.min); ctx.lineTo(order[e], ec.max) }
                         }
-                        if (any) ctx.stroke()
+                        ctx.stroke()
+                        // connecting line through column means (continuity + sparse streams)
+                        if (order.length > 0) {
+                            ctx.beginPath()
+                            for (var k = 0; k < order.length; k++) {
+                                var mc = cols[order[k]].sum / cols[order[k]].n
+                                if (k === 0) ctx.moveTo(order[k], mc); else ctx.lineTo(order[k], mc)
+                            }
+                            ctx.stroke()
+                        }
 
                         ctx.strokeStyle = "#9a9a9a"
                         ctx.lineWidth = 0.7
@@ -599,7 +647,7 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
-                    text: liveWaveform.connected
+                    text: root.receiving
                           ? "Receiving records from " + liveWaveform.endpoint + "    " + liveWaveform.records + " samples"
                           : "Loading records"
                     color: "#202020"

@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace tp::slink { class WaveformClient; }
 
@@ -51,9 +52,17 @@ public:
     QVariantList streams()         const { return m_streams; }
 
 signals:
-    // One decimated triaxial sample of one stream (same shape BusClient emitted, so
-    // the trace view keys series by object/sensor unchanged): object, sensor,
-    // station, timestampMs, sampleRate, x, y, z.
+    // A full batch of one stream's samples accumulated since the last flush — the
+    // whole waveform shape, not just the latest sample. This is the SEED record
+    // model the trace view needs: { object, station, sensor, rate, t0 (ms of the
+    // first sample), n, xs[], ys[], zs[] }; samples are evenly spaced at `rate`
+    // from t0. tprttv draws the full shape from this; without it the trace only ever
+    // saw ~12 Hz (one sample per flush) and the waveform collapsed.
+    void batchReceived(const QVariantMap& batch);
+
+    // One triaxial sample of one stream (latest of the batch): object, sensor,
+    // station, timestampMs, sampleRate, x, y, z. Kept for the monitoring tiles /
+    // last-value consumers that only need the newest reading, not the shape.
     void sampleReceived(const QVariantMap& sample);
     void stateChanged();
     void statsChanged();
@@ -72,6 +81,11 @@ private:
         double  lastAmp = 0;
         quint64 records = 0;
         bool    fresh = false;   // a new sample arrived since the last flush
+        // Pending batch since the last flush: the full waveform shape (not just the
+        // latest sample). Emitted whole by flush(), then cleared. batchT0 is the
+        // timestamp (ms) of the first pending sample; the rest follow at `rate`.
+        std::vector<double> px, py, pz;
+        qint64  batchT0 = 0;
     };
 
     void onTriple(uint32_t station, uint32_t object, uint32_t sensor,
