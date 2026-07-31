@@ -6,6 +6,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 #include <QString>
+#include <QStringList>
 
 #include "slink/WaveformClient.h"   // Triple type (batch sink) + the client
 
@@ -51,6 +52,7 @@ public:
     // objects (tp::loadStationMap); legacy numeric ids need no map.
     LiveWaveformController(const QString& host, quint16 port,
                            std::unordered_map<std::string, uint32_t> stationMap,
+                           QStringList stations = {}, QStringList selectors = {},
                            QObject* parent = nullptr);
     ~LiveWaveformController();
 

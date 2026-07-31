@@ -49,6 +49,12 @@ void WaveformClient::connectAndHandshake() {
         if (sta.isEmpty()) continue;
         cmd(("STATION " + sta + " " + net).toLatin1());
     }
+    // Channel selectors (SELECT), applied after STATION and before DATA. Restricts
+    // the stream to matching channels so we don't pull the whole network.
+    for (const QString& sel : m_selectors) {
+        const QString s = sel.trimmed();
+        if (!s.isEmpty()) cmd(("SELECT " + s).toLatin1());
+    }
     QByteArray dataCmd = "DATA";
     if (m_haveSeq) {
         const quint32 next = (m_lastSeq + 1) & 0xFFFFFF;

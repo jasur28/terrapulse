@@ -9,6 +9,7 @@ using Triple = tp::slink::WaveformClient::Triple;
 
 LiveWaveformController::LiveWaveformController(const QString& host, quint16 port,
                                               std::unordered_map<std::string, uint32_t> stationMap,
+                                              QStringList stations, QStringList selectors,
                                               QObject* parent)
     : QObject(parent)
 {
@@ -21,6 +22,10 @@ LiveWaveformController::LiveWaveformController(const QString& host, quint16 port
 
     m_client = std::make_unique<tp::slink::WaveformClient>(host, port);
     m_client->setStationMap(std::move(stationMap));
+    // Optional subscription subset: pull only these stations / channels off the
+    // backbone (SeedLink STATION + SELECT) instead of the whole network.
+    if (!stations.isEmpty())  m_client->setStations(stations);
+    if (!selectors.isEmpty()) m_client->setSelectors(selectors);
     // onBatch fires on the worker thread, once per network read. Everything heavy —
     // ring append AND decimation — happens there; only the finished envelope/streams/
     // latest are posted (queued) to this (GUI) thread. So m_map is worker-only and

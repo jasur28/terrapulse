@@ -9,6 +9,7 @@
 #include <QTextStream>
 #include <QDateTime>
 #include <QDebug>
+#include <QRegularExpression>
 #include <QUrl>
 #include "controllers/AppController.h"
 #include "controllers/BusClient.h"
@@ -54,7 +55,9 @@ int main(int argc, char *argv[]) {
     // live trace inactive (results-only console). --inventory resolves FDSN ids.
     QCommandLineOption slinkOpt("slink", "tpslinkserver SeedLink endpoint host:port for live waveforms", "host:port", "");
     QCommandLineOption invOpt("inventory", "Inventory JSON for FDSN station->object mapping", "file", "");
-    parser.addOptions({masterOpt, queueOpt, viewOpt, slinkOpt, invOpt});
+    QCommandLineOption stationsOpt("stations", "Subscribe to only these stations (SeedLink STATION), comma/space separated, e.g. \"BRDG1,TWRA\". Empty = all", "list", "");
+    QCommandLineOption selectOpt("select", "SeedLink channel SELECT patterns, comma/space separated, e.g. \"HN?\" or \"??Z\". Empty = all channels", "list", "");
+    parser.addOptions({masterOpt, queueOpt, viewOpt, slinkOpt, invOpt, stationsOpt, selectOpt});
     parser.process(app);
 
     QString requestedView = parser.value(viewOpt).toLower();
@@ -85,8 +88,12 @@ int main(int argc, char *argv[]) {
         slinkHost = c > 0 ? sl.left(c) : sl;
         slinkPort = quint16((c > 0 ? sl.mid(c + 1) : QString()).toUInt());
     }
+    // Optional subscription subset (SeisComp-like partition): --stations / --select.
+    const QStringList stations  = parser.value(stationsOpt).split(QRegularExpression("[,\\s]+"), Qt::SkipEmptyParts);
+    const QStringList selectors = parser.value(selectOpt).split(QRegularExpression("[,\\s]+"), Qt::SkipEmptyParts);
     LiveWaveformController liveWaveform(slinkHost, slinkPort,
-                                        tp::loadStationMap(parser.value(invOpt)));
+                                        tp::loadStationMap(parser.value(invOpt)),
+                                        stations, selectors);
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("appController",     &controller);
