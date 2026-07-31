@@ -1,9 +1,11 @@
 #include "controllers/LiveWaveformController.h"
-#include "slink/WaveformClient.h"
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <vector>
+
+using Triple = tp::slink::WaveformClient::Triple;
 
 LiveWaveformController::LiveWaveformController(const QString& host, quint16 port,
                                               std::unordered_map<std::string, uint32_t> stationMap,
@@ -15,39 +17,26 @@ LiveWaveformController::LiveWaveformController(const QString& host, quint16 port
 
     m_endpoint = host + ":" + QString::number(port);
     m_state    = "waiting";
+    m_clock.start();
 
     m_client = std::make_unique<tp::slink::WaveformClient>(host, port);
     m_client->setStationMap(std::move(stationMap));
-    // The batch sink fires on the worker thread (below), once per network read,
-    // where decode/interleave run. Copy the batch and marshal ONE queued event back
-    // to THIS object's thread — not one per sample — so onTriple()/flush() touch the
-    // rings from one thread only (no locks) and the GUI sees few cross-thread hops
-    // even with many sensors.
-    m_client->onBatch([this](const std::vector<tp::slink::WaveformClient::Triple>& batch) {
-        auto copy = std::make_shared<std::vector<tp::slink::WaveformClient::Triple>>(batch);
-        QMetaObject::invokeMethod(this, [this, copy]() {
-            for (const auto& tr : *copy)
-                onTriple(tr.station, tr.object, tr.sensor, tr.x, tr.y, tr.z, tr.t, tr.rate);
-        }, Qt::QueuedConnection);
-    });
+    // onBatch fires on the worker thread, once per network read. Everything heavy —
+    // ring append AND decimation — happens there; only the finished envelope/streams/
+    // latest are posted (queued) to this (GUI) thread. So m_map is worker-only and
+    // needs no lock.
+    m_client->onBatch([this](const std::vector<Triple>& batch) { ingestBatch(batch); });
 
-    // Run the SeedLink socket, the (blocking) handshake and the miniSEED decode on a
-    // worker thread — a RecordStreamThread analog — so none of it touches the UI
-    // event loop. The client's QTcpSocket is its child, so it moves along.
+    // Socket + handshake + decode + interleave + decimation all run on the worker.
     m_client->moveToThread(&m_thread);
     m_thread.start();
 
-    // flush() and checkLiveness() run on THIS (GUI) thread, draining the rings the
-    // worker fills. flush cadence unchanged.
-    connect(&m_flushTimer, &QTimer::timeout, this, &LiveWaveformController::flush);
-    m_flushTimer.start(80);
-
+    // Only the "went quiet" check runs on the GUI thread.
     connect(&m_liveTimer, &QTimer::timeout, this, &LiveWaveformController::checkLiveness);
     m_liveTimer.start(1000);
-    m_sinceLast.start();
 
     // Start the client inside its own thread, deferred so the window paints first;
-    // the blocking connect+handshake now delays only the worker, never the UI.
+    // the blocking connect+handshake then delays only the worker, never the UI.
     QTimer::singleShot(300, this, [this]() {
         tp::slink::WaveformClient* c = m_client.get();
         if (c) QMetaObject::invokeMethod(c, [c]() { c->start(); }, Qt::QueuedConnection);
@@ -58,7 +47,8 @@ LiveWaveformController::~LiveWaveformController() {
     if (m_thread.isRunning()) {
         // Delete the client inside its own thread (correct affinity), then stop the
         // thread. BlockingQueued waits for the delete; the worker's loop is still
-        // running, so there is no deadlock.
+        // running, so there is no deadlock. After wait() the worker is gone, so m_map
+        // has no concurrent access as the members destruct.
         if (m_client) {
             tp::slink::WaveformClient* c = m_client.release();
             QMetaObject::invokeMethod(c, [c]() { delete c; }, Qt::BlockingQueuedConnection);
@@ -68,94 +58,74 @@ LiveWaveformController::~LiveWaveformController() {
     }
 }
 
-// Called from WaveformClient's reader (main thread): update per-stream state.
-// No emit here — flush() batches UI notifications at a fixed cadence.
+// GUI thread (called from QML paint): the worker reads these next decimation.
 void LiveWaveformController::setViewport(int cols, double windowSecs) {
-    const int c = std::clamp(cols, 64, 4000);
-    const qint64 w = static_cast<qint64>(std::max(1.0, windowSecs) * 1000.0);
-    if (c == m_cols && w == m_windowMs) return;
-    m_cols = c; m_windowMs = w;
+    m_cols.store(std::clamp(cols, 64, 4000));
+    m_windowMs.store(static_cast<qint64>(std::max(1.0, windowSecs) * 1000.0));
 }
 
-void LiveWaveformController::onTriple(uint32_t /*station*/, uint32_t object, uint32_t sensor,
-                                      double x, double y, double z, int64_t tMs, double rate) {
-    Stream& s = m_map[(uint64_t(object) << 32) | sensor];
-    s.object = object; s.sensor = sensor;
-
-    // Append to the rolling window (one time deque shared by the three axes) and
-    // trim anything older than the window (plus a small margin). The envelope is
-    // decimated from this ring in flush().
-    s.rt.push_back(tMs);
-    s.rx.push_back(static_cast<float>(x));
-    s.ry.push_back(static_cast<float>(y));
-    s.rz.push_back(static_cast<float>(z));
-    const qint64 cutoff = tMs - m_windowMs - 2000;
-    while (!s.rt.empty() && s.rt.front() < cutoff) {
-        s.rt.pop_front(); s.rx.pop_front(); s.ry.pop_front(); s.rz.pop_front();
+// Worker thread: append the batch to the per-stream rings, then (throttled) decimate
+// and post the ready envelope + streams + latest samples to the GUI thread in one hop.
+void LiveWaveformController::ingestBatch(const std::vector<Triple>& batch) {
+    const qint64 windowMs = m_windowMs.load();
+    for (const Triple& tr : batch) {
+        Stream& s = m_map[(uint64_t(tr.object) << 32) | tr.sensor];
+        s.object = tr.object; s.sensor = tr.sensor;
+        s.rt.push_back(tr.t);
+        s.rx.push_back(static_cast<float>(tr.x));
+        s.ry.push_back(static_cast<float>(tr.y));
+        s.rz.push_back(static_cast<float>(tr.z));
+        const qint64 cutoff = tr.t - windowMs - 2000;
+        while (!s.rt.empty() && s.rt.front() < cutoff) {
+            s.rt.pop_front(); s.rx.pop_front(); s.ry.pop_front(); s.rz.pop_front();
+        }
+        s.x = tr.x; s.y = tr.y; s.z = tr.z; s.t = tr.t;
+        if (tr.rate > 0) s.rate = tr.rate;
+        s.lastAmp = std::max({std::fabs(tr.x), std::fabs(tr.y), std::fabs(tr.z)});
+        ++s.records;
     }
+    m_records.fetch_add(batch.size());
+    m_lastDataMs.store(m_clock.elapsed());
 
-    s.x = x; s.y = y; s.z = z; s.t = tMs;   // latest (tiles / last-value consumers)
-    if (rate > 0) s.rate = rate;
-    s.lastAmp = std::max({std::fabs(x), std::fabs(y), std::fabs(z)});
-    ++s.records;
-    ++m_records;
-    s.fresh = true;
-    m_sinceLast.restart();
+    // Throttle decimation to ~12/s regardless of how often reads arrive.
+    const qint64 now = m_clock.elapsed();
+    if (now - m_lastDecimMs < 80) return;
+    m_lastDecimMs = now;
+
+    QVariantList env     = buildEnvelopeList();
+    QVariantList streams = buildStreamList();
+    QVariantList latest  = buildLatestList();
+
+    QMetaObject::invokeMethod(this, [this, env, streams, latest]() {
+        m_envelopes = env;     emit envelopesChanged();
+        m_streams   = streams; emit streamsChanged();
+        for (const QVariant& v : latest) emit sampleReceived(v.toMap());
+        if (!m_connected) { m_connected = true; m_state = "live"; emit stateChanged(); }
+        emit statsChanged();
+    }, Qt::QueuedConnection);
 }
 
-void LiveWaveformController::flush() {
-    bool any = false;
-    for (auto& kv : m_map) {
-        Stream& s = kv.second;
-        if (!s.fresh) continue;
-        s.fresh = false;
-        any = true;
-
-        // Latest single sample — monitoring tiles consume this. The trace view reads
-        // the decimated `envelopes` instead (built once below, not per sample).
-        QVariantMap sample;
-        sample["station"]     = s.object;
-        sample["object"]      = s.object;
-        sample["sensor"]      = s.sensor;
-        sample["timestampMs"] = static_cast<qlonglong>(s.t);
-        sample["sampleRate"]  = s.rate > 0 ? s.rate : 200;
-        sample["x"]           = s.x;
-        sample["y"]           = s.y;
-        sample["z"]           = s.z;
-        emit sampleReceived(sample);
-    }
-    if (!any) return;
-
-    if (!m_connected) { m_connected = true; m_state = "live"; emit stateChanged(); }
-    buildEnvelopes();
-    rebuildStreams();
-    emit statsChanged();
-}
-
-// Decimate each stream's rolling window to per-pixel columns the QML trace can draw
-// directly: for each of the three axes, a min[] and max[] over `m_cols` columns plus
-// the mean/rms/peak used to auto-scale. The O(N) decimation runs in C++ (not QML JS),
-// though still on the GUI thread — moving WaveformClient's socket+decode to a worker
-// thread (a RecordStreamThread analog) is the remaining step off the UI thread.
-void LiveWaveformController::buildEnvelopes() {
-    const int cols = std::max(1, m_cols);
+// Decimate each stream's rolling window to per-pixel columns the QML trace draws
+// directly: per axis a min[]/max[] over `m_cols` columns plus mean/rms/peak for the
+// auto-scale. Runs on the worker thread (off the UI), reading the worker-owned rings.
+QVariantList LiveWaveformController::buildEnvelopeList() const {
+    const int cols = std::max(1, m_cols.load());
+    const qint64 windowMs = m_windowMs.load();
     QVariantList out;
 
-    for (auto& kv : m_map) {
-        Stream& s = kv.second;
+    for (const auto& kv : m_map) {
+        const Stream& s = kv.second;
         if (s.rt.empty()) continue;
         const qint64 tEnd = s.rt.back();
-        const qint64 tStart = tEnd - m_windowMs;
-        const double span = double(m_windowMs);
+        const qint64 tStart = tEnd - windowMs;
+        const double span = double(windowMs);
 
-        // Per-axis accumulators over the visible window.
         const std::deque<float>* axes[3] = { &s.rx, &s.ry, &s.rz };
         double sum[3] = {0,0,0}, sumSq[3] = {0,0,0}, peak[3] = {1e-9,1e-9,1e-9};
         int used = 0;
         std::vector<float> mn[3], mx[3];
         for (int a = 0; a < 3; ++a) { mn[a].assign(cols, 1e30f); mx[a].assign(cols, -1e30f); }
 
-        // Pass 1: means (need the mean before the deviation stats).
         for (std::size_t i = 0; i < s.rt.size(); ++i) {
             if (s.rt[i] < tStart) continue;
             ++used;
@@ -164,7 +134,6 @@ void LiveWaveformController::buildEnvelopes() {
         if (used == 0) continue;
         const double mean[3] = { sum[0]/used, sum[1]/used, sum[2]/used };
 
-        // Pass 2: deviation stats + per-column min/max.
         for (std::size_t i = 0; i < s.rt.size(); ++i) {
             if (s.rt[i] < tStart) continue;
             int b = int(double(s.rt[i] - tStart) / span * cols);
@@ -215,19 +184,17 @@ void LiveWaveformController::buildEnvelopes() {
             return ma["object"].toUInt() < mb["object"].toUInt();
         return ma["sensor"].toUInt() < mb["sensor"].toUInt();
     });
-    m_envelopes = out;
-    emit envelopesChanged();
+    return out;
 }
 
-// The set of streams actually arriving over the backbone — this is what drives the
-// trace rows, so the view reflects the record stream rather than static inventory.
-void LiveWaveformController::rebuildStreams() {
+// The set of streams arriving over the backbone — drives the trace rows.
+QVariantList LiveWaveformController::buildStreamList() const {
     QVariantList list;
     for (const auto& kv : m_map) {
         const Stream& s = kv.second;
         QVariantMap m;
         m["object"]  = s.object;
-        m["station"] = s.object;              // numeric id; network/station strings are future work
+        m["station"] = s.object;              // numeric id; net/sta strings are future work
         m["network"] = QStringLiteral("TP");
         m["sensor"]  = s.sensor;
         m["rate"]    = s.rate;
@@ -241,12 +208,32 @@ void LiveWaveformController::rebuildStreams() {
             return ma["object"].toUInt() < mb["object"].toUInt();
         return ma["sensor"].toUInt() < mb["sensor"].toUInt();
     });
-    m_streams = list;
-    emit streamsChanged();
+    return list;
+}
+
+// Latest triaxial sample per stream — the monitoring tiles and the trace's time axis
+// consume this shape (via sampleReceived), emitted on the GUI thread by ingestBatch.
+QVariantList LiveWaveformController::buildLatestList() const {
+    QVariantList list;
+    for (const auto& kv : m_map) {
+        const Stream& s = kv.second;
+        if (s.rt.empty()) continue;
+        QVariantMap sample;
+        sample["station"]     = s.object;
+        sample["object"]      = s.object;
+        sample["sensor"]      = s.sensor;
+        sample["timestampMs"] = static_cast<qlonglong>(s.t);
+        sample["sampleRate"]  = s.rate > 0 ? s.rate : 200;
+        sample["x"]           = s.x;
+        sample["y"]           = s.y;
+        sample["z"]           = s.z;
+        list.append(sample);
+    }
+    return list;
 }
 
 void LiveWaveformController::checkLiveness() {
-    if (m_connected && m_sinceLast.elapsed() > 2500) {
+    if (m_connected && (m_clock.elapsed() - m_lastDataMs.load()) > 2500) {
         m_connected = false;
         m_state = "waiting";
         emit stateChanged();

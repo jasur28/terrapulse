@@ -7,14 +7,15 @@
 #include <QVariantMap>
 #include <QString>
 
+#include "slink/WaveformClient.h"   // Triple type (batch sink) + the client
+
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-namespace tp::slink { class WaveformClient; }
 
 // LiveWaveformController — the GUI's live-waveform source, a RecordStream client
 // rather than a message-bus subscriber. SeisComp's consoles read waveforms over
@@ -24,11 +25,13 @@ namespace tp::slink { class WaveformClient; }
 // (tpslinkserver) through this controller. The old path — subscribing to `raw.`
 // on the broker (BusClient) — was only ever a demo shortcut.
 //
-// It wraps tp::slink::WaveformClient (connect + handshake + decode + resume),
-// decimates to one representative triaxial sample per stream per flush tick so
-// the QML canvas stays light, and exposes what the trace view needs: the set of
-// live `streams`, a running `records` count, and a `connectionState`. The UI does
-// no processing — it only draws what arrives here.
+// It wraps tp::slink::WaveformClient, which runs on a worker thread (m_thread):
+// the socket, the handshake, the miniSEED decode/interleave AND the trace
+// decimation all happen there. Only a ready per-pixel envelope, the streams list
+// and the latest samples are posted (queued) to the GUI thread. So the rings are
+// touched from the worker thread alone and the GUI-visible members (m_envelopes,
+// m_streams, m_state) from the GUI thread alone — no locks, shared scalars are
+// atomic. The UI does no processing; it only draws the envelope that arrives here.
 class LiveWaveformController : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString      endpoint        READ endpoint        CONSTANT)
@@ -54,7 +57,7 @@ public:
     QString      endpoint()        const { return m_endpoint; }
     bool         connected()       const { return m_connected; }
     QString      connectionState() const { return m_state; }
-    qulonglong   records()         const { return m_records; }
+    qulonglong   records()         const { return m_records.load(); }
     QVariantList streams()         const { return m_streams; }
     QVariantList envelopes()       const { return m_envelopes; }
 
@@ -74,8 +77,7 @@ signals:
     void streamsChanged();
 
 private slots:
-    void flush();         // emit each stream's newest sample, refresh the streams list
-    void checkLiveness(); // flip connected/state when the feed goes quiet
+    void checkLiveness(); // flip connected/state when the feed goes quiet (GUI thread)
 
 private:
     struct Stream {
@@ -85,35 +87,36 @@ private:
         double  rate = 0;
         double  lastAmp = 0;
         quint64 records = 0;
-        bool    fresh = false;   // a new sample arrived since the last flush
         // Rolling window of the last windowMs of samples (triaxial, one shared time
-        // deque). The decimated envelope is built from this each flush.
+        // deque). Worker-thread only; the envelope is decimated from this.
         std::deque<qint64> rt;
         std::deque<float>  rx, ry, rz;
     };
 
-    void onTriple(uint32_t station, uint32_t object, uint32_t sensor,
-                  double x, double y, double z, int64_t tMs, double rate);
-    void rebuildStreams();
-    void buildEnvelopes();   // decimate each stream's ring to per-pixel min/max/mean
+    // --- worker thread (m_thread) ---
+    void ingestBatch(const std::vector<tp::slink::WaveformClient::Triple>& batch);
+    QVariantList buildEnvelopeList() const;  // decimate rings to per-pixel min/max/mean
+    QVariantList buildStreamList()   const;  // the live streams for the trace rows
+    QVariantList buildLatestList()   const;  // latest triaxial sample per stream (tiles)
 
-    QThread                                    m_thread;   // runs m_client's socket+decode
+    QThread                                    m_thread;   // runs socket+decode+decimation
     std::unique_ptr<tp::slink::WaveformClient> m_client;
-    std::unordered_map<uint64_t, Stream>       m_map;   // key = object<<32 | sensor
+    std::unordered_map<uint64_t, Stream>       m_map;   // key = object<<32 | sensor (worker)
+    qint64        m_lastDecimMs = 0;                    // worker: throttle decimation
 
     QString       m_endpoint;
-    QString       m_state = "off";
-    QTimer        m_flushTimer;
-    QTimer        m_liveTimer;
-    QElapsedTimer m_sinceLast;
+    QString       m_state = "off";     // GUI thread
+    QTimer        m_liveTimer;         // GUI thread
+    QElapsedTimer m_clock;             // monotonic, never reset (read from both threads)
 
-    bool         m_active    = false;
-    bool         m_connected = false;
-    qulonglong   m_records   = 0;
-    QVariantList m_streams;
+    bool                  m_active    = false;
+    bool                  m_connected = false;   // GUI thread
+    std::atomic<qint64>   m_lastDataMs{0};       // worker writes, GUI reads (liveness)
+    std::atomic<quint64>  m_records{0};
+    QVariantList          m_streams;             // GUI thread
+    QVariantList          m_envelopes;           // GUI thread
 
-    // Trace viewport (set by QML) and the decimated envelope built from the rings.
-    int          m_cols     = 1000;      // pixel columns to decimate to
-    qint64       m_windowMs = 60000;     // visible time span
-    QVariantList m_envelopes;
+    // Trace viewport (set by QML on the GUI thread, read by the worker decimation).
+    std::atomic<int>      m_cols{1000};          // pixel columns to decimate to
+    std::atomic<qint64>   m_windowMs{60000};     // visible time span (ms)
 };
