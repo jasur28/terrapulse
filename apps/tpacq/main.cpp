@@ -18,6 +18,7 @@
 #include <QCoreApplication>
 #include <QCommandLineParser>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QStringList>
 #include <QTcpSocket>
@@ -57,6 +58,10 @@ struct Config {
                                   // the GUI gets a fresh record ~2×/s (100 @ 200 Hz),
                                   // not one 5 s burst (1000). Decoupled from the archive.
     int     batch = 20;           // bus samples per message (1 = per-sample)
+    int     stallMs = 2000;       // --stall-timeout: device mode. If no bytes arrive
+                                  // for this long while the port is open, reopen it
+                                  // (the DTR/RTS pulse on connect resets a hung MCU);
+                                  // also retries a failed/dropped open. 0 disables.
     QString slinkHost;            // --slink host:port: push miniSEED records to a
     quint16 slinkPort = 0;        // tpslinkserver feed (waveform backbone, no bus)
     bool    noBus = false;        // --no-bus: don't publish raw. to the broker at
@@ -130,8 +135,49 @@ public:
         QObject::connect(&m_statsTimer, &QTimer::timeout, [this]() { printStats(); });
         m_statsTimer.start(2000);
 
+        // Device-stall watchdog: only for a real serial device (not sim/replay). A
+        // hung accelerometer keeps the port open but stops sending; a plain "is the
+        // process alive" check can't see that, so watch the byte counter and reopen
+        // the port when it stops advancing.
+        if (!m_cfg.useSim && !m_cfg.useReplay && !m_cfg.port.isEmpty() && m_cfg.stallMs > 0) {
+            m_stallSince.start();
+            QObject::connect(&m_stallTimer, &QTimer::timeout, [this]() { checkStall(); });
+            m_stallTimer.start(500);
+        }
+
         announce();
         return true;
+    }
+
+    // Watchdog for a silent or dropped serial device (device mode only). If the port
+    // is open but no bytes have arrived for stallMs, reopen it — SerialStreamReceiver
+    // pulses DTR/RTS on connect, which resets a hung MCU (DTR wired to NRST) and
+    // restarts the stream. If the port isn't open (failed/removed), retry the open.
+    void checkStall() {
+        if (m_cfg.stallMs <= 0) return;
+        if (!m_serial.isConnected()) {                  // not open: retry the open
+            if (m_stallSince.elapsed() < m_cfg.stallMs) return;
+            m_serial.connectPort(m_cfg.port);
+            m_lastBytesSeen = m_serial.bytesReceived();
+            m_stallSince.restart();
+            return;
+        }
+        const quint64 now = m_serial.bytesReceived();
+        if (now != m_lastBytesSeen) {                   // data flowing: all good
+            m_lastBytesSeen = now;
+            m_stallSince.restart();
+            return;
+        }
+        if (m_stallSince.elapsed() < m_cfg.stallMs) return;
+        ++m_deviceReopens;                              // stalled: reopen to re-pulse
+        std::printf("[tpacq] stall: no data for %d ms -> reopening %s (reopen #%llu)\n",
+                    m_cfg.stallMs, m_cfg.port.toUtf8().constData(),
+                    static_cast<unsigned long long>(m_deviceReopens));
+        std::fflush(stdout);
+        m_serial.disconnectPort();
+        m_serial.connectPort(m_cfg.port);
+        m_lastBytesSeen = m_serial.bytesReceived();     // reset (connectPort clears it)
+        m_stallSince.restart();
     }
 
     QVariantMap sohCounters() override {
@@ -442,7 +488,9 @@ private:
     QFile m_recFile;
     QTextStream m_recOut;
 
-    QTimer m_simTimer, m_replayTimer, m_statsTimer;
+    QTimer m_simTimer, m_replayTimer, m_statsTimer, m_stallTimer;
+    QElapsedTimer m_stallSince;      // since bytes last advanced (device stall watchdog)
+    quint64 m_lastBytesSeen = 0, m_deviceReopens = 0;
     std::vector<Rec> m_recs;
     std::size_t m_idx = 0;
     quint64 m_seq = 0, m_published = 0;
@@ -485,6 +533,7 @@ int main(int argc, char* argv[]) {
     QCommandLineOption cornerOpt ("corner",     "Sensor corner period (s); >=10 => broadband band code", "sec", "1e9");
     QCommandLineOption recSampOpt("record-samples","archive miniSEED record fill (fill vs disk overhead)", "n", "1000");
     QCommandLineOption feedSampOpt("feed-samples","live-feed record fill: smaller = lower latency (100 @ 200 Hz ~= 2 records/s)", "n", "100");
+    QCommandLineOption stallOpt  ("stall-timeout","device mode: reopen the port if no bytes arrive for this long (ms; wakes a hung MCU via DTR/RTS). 0 disables", "ms", "2000");
     QCommandLineOption batchOpt  ("batch",       "Bus samples per message (cuts message rate; 1 = per-sample)", "n", "20");
     QCommandLineOption slinkOpt  ("slink",       "Push miniSEED records to a tpslinkserver feed host:port "
                                   "(waveform backbone, no broker)", "host:port", "");
@@ -494,7 +543,7 @@ int main(int argc, char* argv[]) {
                                   "before the oldest are dropped", "n", "20000");
     parser.addOptions({portOpt, masterOpt, queueOpt, simOpt, simEventsOpt, rateOpt, replayOpt, historicOpt,
                        speedOpt, recordOpt, archiveOpt, bufferOpt, baudOpt, stationOpt, objectOpt, sensorOpt,
-                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt, feedSampOpt, batchOpt, slinkOpt, noBusOpt, backlogOpt});
+                       netOpt, staCodeOpt, kindOpt, cornerOpt, recSampOpt, feedSampOpt, stallOpt, batchOpt, slinkOpt, noBusOpt, backlogOpt});
     parser.process(app);
 
     Config cfg;
@@ -507,6 +556,7 @@ int main(int argc, char* argv[]) {
     cfg.cornerPeriod= parser.value(cornerOpt).toDouble();
     cfg.recordSamples = std::max(8, parser.value(recSampOpt).toInt());
     cfg.feedSamples   = std::max(8, parser.value(feedSampOpt).toInt());
+    cfg.stallMs       = std::max(0, parser.value(stallOpt).toInt());
     cfg.batch         = std::max(1, parser.value(batchOpt).toInt());
     if (const QString sl = parser.value(slinkOpt); !sl.isEmpty()) {
         const int colon = sl.lastIndexOf(':');
