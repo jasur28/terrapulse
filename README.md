@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="TerraPulse" width="460">
+</p>
+
 # TerraPulse
 
 **Интеллектуальный мониторинг состояния зданий и мостов в реальном времени.**
