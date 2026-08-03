@@ -39,6 +39,8 @@
   .hero{position:relative;overflow:hidden;padding:92px 0 78px;text-align:center}
   .hero:before{content:"";position:absolute;inset:0;
     background:radial-gradient(58% 55% at 50% 0%,rgba(47,214,195,.10),transparent 70%);pointer-events:none}
+  .herologo{margin:0 auto 22px;line-height:0}
+  .herologo svg{width:132px;height:132px;filter:drop-shadow(0 10px 34px rgba(47,214,195,.14))}
   .badge{display:inline-flex;align-items:center;gap:8px;padding:6px 15px;border-radius:999px;
     border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:13px;margin-bottom:26px}
   .badge .dot{width:8px;height:8px;border-radius:50%;background:var(--teal);animation:pulse 2s infinite}
@@ -131,6 +133,20 @@
 <!-- HERO -->
 <section class="hero">
   <div class="wrap">
+    <div class="herologo">
+      <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TerraPulse">
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#0e1626"/><stop offset="1" stop-color="#070b13"/></linearGradient></defs>
+        <rect width="512" height="512" rx="116" fill="url(#lg)" stroke="#26344c" stroke-width="1.5"/>
+        <circle cx="256" cy="212" r="122" fill="none" stroke="#2fd6c3" stroke-opacity=".24" stroke-width="4"/>
+        <circle cx="256" cy="212" r="84" fill="none" stroke="#2fd6c3" stroke-opacity=".15" stroke-width="4"/>
+        <path d="M146 212 H204 L225 150 L256 300 L283 168 L302 212 H366" fill="none"
+              stroke="#2fd6c3" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="256" y="412" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif"
+              font-size="68" font-weight="800" letter-spacing="-1.5">
+          <tspan fill="#eaf0f7">Terra</tspan><tspan fill="#2fd6c3">Pulse</tspan></text>
+      </svg>
+    </div>
     <div class="badge"><span class="dot"></span> Рабочий прототип уже работает вживую</div>
     <h1>Пульс каждой<br><span class="grad">конструкции</span></h1>
     <p class="lead">Интеллектуальный мониторинг зданий и мостов в реальном времени.
