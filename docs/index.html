@@ -3,109 +3,105 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TerraPulse — мониторинг состояния зданий и мостов</title>
-<meta name="description" content="TerraPulse — непрерывный интеллектуальный мониторинг технического состояния зданий и мостов по вибрации. От датчика до инженерного решения.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%2312162A'/><polyline points='4,17 11,17 14,9 18,24 21,14 28,14' fill='none' stroke='%2300E5FF' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+<title>TerraPulse — мониторинг зданий и мостов в реальном времени</title>
+<meta name="description" content="TerraPulse — интеллектуальный мониторинг состояния зданий и мостов по вибрации. Свои акселерометры, облачная платформа, открытые стандарты. От железа до экрана — сделано нами.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230b1220'/><circle cx='16' cy='15' r='11' fill='none' stroke='%232fd6c3' stroke-opacity='.5' stroke-width='1.3'/><polyline points='4,15 10,15 12.5,8 16,23 18.5,11 20.5,15 28,15' fill='none' stroke='%232fd6c3' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/></svg>">
 <style>
   :root{
-    --bg:#0F1324; --bg2:#12162A; --panel:#16213E; --panel2:#1B2748;
-    --line:#26314f; --cyan:#00E5FF; --green:#00C853; --yellow:#FFD600;
-    --text:#E6EAF2; --muted:#9AA6BF;
+    --bg:#0a0e17; --bg2:#0c1220; --panel:#101a2c; --panel2:#16233c;
+    --line:#26344c; --teal:#2fd6c3; --tealdim:rgba(47,214,195,.12); --amber:#f6a831;
+    --text:#e9eef7; --muted:#94a2ba; --faint:#66768f;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html{scroll-behavior:smooth}
-  body{
-    font-family:"Segoe UI",Roboto,-apple-system,Arial,sans-serif;
-    background:var(--bg); color:var(--text); line-height:1.6;
-    -webkit-font-smoothing:antialiased;
-  }
+  body{font-family:"Segoe UI",Roboto,-apple-system,Arial,sans-serif;
+    background:var(--bg);color:var(--text);line-height:1.6;-webkit-font-smoothing:antialiased}
   a{color:inherit;text-decoration:none}
   .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
-  .btn{
-    display:inline-block;padding:13px 26px;border-radius:10px;font-weight:600;
-    font-size:15px;transition:.2s;border:1px solid transparent;cursor:pointer;
-  }
-  .btn-primary{background:linear-gradient(90deg,var(--cyan),var(--green));color:#06131b}
-  .btn-primary:hover{filter:brightness(1.08);transform:translateY(-1px)}
+  .mono{font-family:"Consolas",ui-monospace,monospace}
+  .btn{display:inline-block;padding:13px 26px;border-radius:10px;font-weight:600;
+    font-size:15px;transition:.2s;border:1px solid transparent;cursor:pointer}
+  .btn-primary{background:var(--teal);color:#04120f}
+  .btn-primary:hover{filter:brightness(1.07);transform:translateY(-1px)}
   .btn-ghost{border-color:var(--line);color:var(--text)}
-  .btn-ghost:hover{border-color:var(--cyan);color:var(--cyan)}
-  .eyebrow{color:var(--cyan);font-size:13px;letter-spacing:3px;text-transform:uppercase;font-weight:600}
+  .btn-ghost:hover{border-color:var(--teal);color:var(--teal)}
+  .eyebrow{color:var(--teal);font-size:13px;letter-spacing:3px;text-transform:uppercase;font-weight:600;font-family:"Consolas",monospace}
 
-  /* Header */
-  header{position:sticky;top:0;z-index:20;background:rgba(15,19,36,.82);
+  header{position:sticky;top:0;z-index:20;background:rgba(10,14,23,.82);
     backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
   .nav{display:flex;align-items:center;justify-content:space-between;height:66px}
-  .brand{display:flex;align-items:center;gap:11px;font-weight:700;font-size:19px}
-  .brand .tp{color:var(--cyan)}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:19px}
+  .brand .tp{color:var(--teal)}
   .nav-links{display:flex;gap:26px;font-size:15px;color:var(--muted)}
   .nav-links a:hover{color:var(--text)}
-  @media(max-width:720px){.nav-links{display:none}}
+  @media(max-width:760px){.nav-links{display:none}}
 
-  /* Hero */
-  .hero{position:relative;overflow:hidden;padding:96px 0 84px;text-align:center}
+  .hero{position:relative;overflow:hidden;padding:92px 0 78px;text-align:center}
   .hero:before{content:"";position:absolute;inset:0;
-    background:radial-gradient(60% 60% at 50% 0%,rgba(0,229,255,.10),transparent 70%);
-    pointer-events:none}
+    background:radial-gradient(58% 55% at 50% 0%,rgba(47,214,195,.10),transparent 70%);pointer-events:none}
   .badge{display:inline-flex;align-items:center;gap:8px;padding:6px 15px;border-radius:999px;
     border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:13px;margin-bottom:26px}
-  .badge .dot{width:8px;height:8px;border-radius:50%;background:var(--green);
-    box-shadow:0 0 0 0 rgba(0,200,83,.6);animation:pulse 2s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(0,200,83,.55)}70%{box-shadow:0 0 0 9px rgba(0,200,83,0)}100%{box-shadow:0 0 0 0 rgba(0,200,83,0)}}
-  h1{font-size:clamp(34px,6vw,60px);line-height:1.08;font-weight:800;letter-spacing:-.5px}
-  h1 .grad{background:linear-gradient(90deg,var(--cyan),var(--green));-webkit-background-clip:text;background-clip:text;color:transparent}
-  .lead{max-width:640px;margin:22px auto 34px;font-size:clamp(16px,2.4vw,20px);color:var(--muted)}
+  .badge .dot{width:8px;height:8px;border-radius:50%;background:var(--teal);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(47,214,195,.55)}70%{box-shadow:0 0 0 9px rgba(47,214,195,0)}100%{box-shadow:0 0 0 0 rgba(47,214,195,0)}}
+  h1{font-size:clamp(36px,6.2vw,62px);line-height:1.05;font-weight:800;letter-spacing:-.5px}
+  h1 .grad{color:var(--teal)}
+  .lead{max-width:660px;margin:22px auto 16px;font-size:clamp(16px,2.4vw,20px);color:var(--muted)}
+  .chips{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:0 auto 30px}
+  .chip{font-size:13px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:6px 14px}
+  .chip b{color:var(--teal)}
   .cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
-  .pulseline{margin:56px auto 0;max-width:760px;width:100%}
+  .pulseline{margin:52px auto 0;max-width:760px;width:100%}
   .pulseline polyline{stroke-dasharray:1400;stroke-dashoffset:1400;animation:draw 3s ease forwards .3s}
   @keyframes draw{to{stroke-dashoffset:0}}
+  @media(prefers-reduced-motion:reduce){.pulseline polyline{animation:none;stroke-dashoffset:0}.badge .dot{animation:none}}
 
-  /* Sections */
-  section{padding:76px 0}
-  .section-head{text-align:center;max-width:620px;margin:0 auto 48px}
+  section{padding:74px 0}
+  .section-head{text-align:center;max-width:640px;margin:0 auto 46px}
   .section-head h2{font-size:clamp(26px,4vw,38px);font-weight:800;margin:12px 0 10px;letter-spacing:-.3px}
   .section-head p{color:var(--muted);font-size:17px}
 
   .grid{display:grid;gap:20px}
+  .g2{grid-template-columns:1fr 1fr}
   .g3{grid-template-columns:repeat(3,1fr)}
   .g4{grid-template-columns:repeat(4,1fr)}
   @media(max-width:860px){.g3,.g4{grid-template-columns:1fr 1fr}}
-  @media(max-width:560px){.g3,.g4{grid-template-columns:1fr}}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px}
+  @media(max-width:560px){.g2,.g3,.g4{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:26px}
   .card:hover{border-color:#33436e}
   .card .ic{width:46px;height:46px;border-radius:11px;display:flex;align-items:center;justify-content:center;
     background:var(--panel2);margin-bottom:16px;font-size:22px}
-  .card h3{font-size:19px;margin-bottom:8px}
+  .card .k{color:var(--teal);font-size:12px;letter-spacing:2px;font-family:"Consolas",monospace;text-transform:uppercase}
+  .card h3{font-size:19px;margin:6px 0 8px}
   .card p{color:var(--muted);font-size:15px}
-  .num{color:var(--cyan);font-weight:800;font-size:14px;letter-spacing:2px}
 
-  /* Problem band */
   .band{background:var(--bg2);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 
-  /* Steps */
   .steps{counter-reset:s}
   .step{display:flex;gap:18px;align-items:flex-start;padding:20px 0;border-bottom:1px solid var(--line)}
   .step:last-child{border-bottom:0}
-  .step .n{flex:0 0 42px;height:42px;border-radius:50%;border:1px solid var(--cyan);color:var(--cyan);
+  .step .n{flex:0 0 42px;height:42px;border-radius:50%;border:1px solid var(--teal);color:var(--teal);
     display:flex;align-items:center;justify-content:center;font-weight:700}
   .step h3{font-size:18px}
   .step p{color:var(--muted);font-size:15px}
 
-  /* Value */
   .val{display:flex;gap:14px;align-items:flex-start}
-  .val .ic{color:var(--green);font-size:20px;line-height:1.4}
+  .val .ic{color:var(--teal);font-size:20px;line-height:1.4}
   .val b{display:block;margin-bottom:2px}
   .val span{color:var(--muted);font-size:15px}
 
-  /* Scale CTA */
+  /* prototype stats */
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px;text-align:center}
+  .stat .big{font-size:28px;font-weight:800;color:var(--teal)}
+  .stat .lab{color:var(--muted);font-size:14px;margin-top:4px}
+
   .scale{background:linear-gradient(135deg,var(--panel),var(--panel2));border:1px solid var(--line);
     border-radius:22px;padding:52px 32px;text-align:center}
   .scale h2{font-size:clamp(24px,4vw,34px);font-weight:800;margin-bottom:12px}
   .scale p{color:var(--muted);max-width:560px;margin:0 auto 26px}
 
-  /* Footer */
-  footer{border-top:1px solid var(--line);padding:44px 0;color:var(--muted);font-size:14px}
+  footer{border-top:1px solid var(--line);padding:40px 0;color:var(--muted);font-size:14px}
   .foot{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center}
-  .foot a:hover{color:var(--cyan)}
+  .foot a:hover{color:var(--teal)}
   .foot .links{display:flex;gap:22px}
 </style>
 </head>
@@ -114,17 +110,19 @@
 <header>
   <div class="wrap nav">
     <div class="brand">
-      <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true">
-        <rect width="32" height="32" rx="7" fill="#12162A" stroke="#26314f"/>
-        <polyline points="4,17 11,17 14,9 18,24 21,14 28,14" fill="none" stroke="#00E5FF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="7" fill="#0b1220" stroke="#26344c"/>
+        <circle cx="16" cy="15" r="11" fill="none" stroke="#2fd6c3" stroke-opacity=".5" stroke-width="1.3"/>
+        <polyline points="4,15 10,15 12.5,8 16,23 18.5,11 20.5,15 28,15" fill="none" stroke="#2fd6c3" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span>Terra<span class="tp">Pulse</span></span>
     </div>
     <nav class="nav-links">
       <a href="#problem">Проблема</a>
-      <a href="#solution">Решение</a>
+      <a href="#product">Продукт</a>
       <a href="#how">Как работает</a>
-      <a href="#value">Ценность</a>
+      <a href="#why">Почему мы</a>
+      <a href="#team">Команда</a>
     </nav>
     <a class="btn btn-ghost" href="https://github.com/jasur28/terrapulse" target="_blank" rel="noopener">GitHub</a>
   </div>
@@ -133,21 +131,23 @@
 <!-- HERO -->
 <section class="hero">
   <div class="wrap">
-    <div class="badge"><span class="dot"></span> Рабочий прототип · MVP</div>
-    <h1>Пульс ваших зданий<br>и <span class="grad">мостов</span></h1>
-    <p class="lead">Непрерывный интеллектуальный мониторинг технического состояния
-       инженерных сооружений по вибрации — от датчика до инженерного решения.</p>
+    <div class="badge"><span class="dot"></span> Рабочий прототип уже работает вживую</div>
+    <h1>Пульс каждой<br><span class="grad">конструкции</span></h1>
+    <p class="lead">Интеллектуальный мониторинг зданий и мостов в реальном времени.
+       Датчик, полевой узел, облако — как в промышленных сейсмосистемах.</p>
+    <div class="chips">
+      <span class="chip"><b>Свои</b> акселерометры</span>
+      <span class="chip"><b>Облачная</b> платформа</span>
+      <span class="chip">Открытые стандарты</span>
+    </div>
     <div class="cta">
-      <a class="btn btn-primary" href="#solution">Как это устроено</a>
+      <a class="btn btn-primary" href="#product">Как это устроено</a>
       <a class="btn btn-ghost" href="https://github.com/jasur28/terrapulse" target="_blank" rel="noopener">Открыть на GitHub</a>
     </div>
     <svg class="pulseline" viewBox="0 0 760 120" fill="none" aria-hidden="true">
-      <line x1="0" y1="72" x2="760" y2="72" stroke="#26314f" stroke-width="1.5"/>
+      <line x1="0" y1="72" x2="760" y2="72" stroke="#26344c" stroke-width="1.5"/>
       <polyline points="0,72 210,72 250,72 275,40 300,104 330,18 360,90 390,72 470,72 505,52 535,88 565,72 760,72"
-        stroke="url(#g)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
-      <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0" stop-color="#00E5FF"/><stop offset="1" stop-color="#00C853"/>
-      </linearGradient></defs>
+        stroke="#2fd6c3" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
   </div>
 </section>
@@ -157,38 +157,39 @@
   <div class="wrap">
     <div class="section-head">
       <span class="eyebrow">Проблема</span>
-      <h2>Сооружения стареют незаметно</h2>
-      <p>Усталость материала, трещины, осадки грунта, старение конструкций.
-         Периодические осмотры не видят, что происходит между проверками —
-         а цена ошибки измеряется безопасностью людей.</p>
+      <h2>Конструкции стареют незаметно</h2>
+      <p>Трещины, усталость металла, осадка фундамента — их не видно снаружи, пока не поздно.
+         А цена ошибки измеряется безопасностью людей, особенно в сейсмоопасном регионе.</p>
     </div>
     <div class="grid g3">
       <div class="card"><div class="ic">🕳️</div><h3>Скрытый износ</h3>
-        <p>Повреждения накапливаются внутри конструкции и долго остаются невидимыми.</p></div>
+        <p>Повреждения копятся внутри конструкции и долго остаются невидимыми.</p></div>
       <div class="card"><div class="ic">📅</div><h3>Редкий контроль</h3>
-        <p>Осмотры проводят раз в месяцы или годы — между ними объект без наблюдения.</p></div>
-      <div class="card"><div class="ic">⚠️</div><h3>Высокая цена отказа</h3>
-        <p>Внезапные аварии несут угрозу жизни и дорогостоящие последствия.</p></div>
+        <p>Осмотры раз в месяцы или годы — между ними объект в «слепой зоне».</p></div>
+      <div class="card"><div class="ic">⚠️</div><h3>После землетрясения</h3>
+        <p>Никто не знает наверняка: безопасно ли эксплуатировать здание.</p></div>
     </div>
   </div>
 </section>
 
-<!-- SOLUTION -->
-<section id="solution">
+<!-- PRODUCT -->
+<section id="product">
   <div class="wrap">
     <div class="section-head">
-      <span class="eyebrow">Решение</span>
-      <h2>Непрерывное объективное наблюдение</h2>
-      <p>Собственный прибор, локальный узел сбора и программная платформа —
-         единая система от датчика до решения оператора.</p>
+      <span class="eyebrow">Продукт · наши приборы</span>
+      <h2>Полный цикл — от железа до облака, всё своё</h2>
+      <p>Мы разрабатываем весь стек сами: от акселерометра и электроники
+         до встроенного ПО и облачной платформы.</p>
     </div>
-    <div class="grid g3">
-      <div class="card"><div class="ic">📟</div><h3>Собственный прибор</h3>
-        <p>Компактный датчик крепится на конструкцию и постоянно снимает её вибрацию.</p></div>
-      <div class="card"><div class="ic">🗄️</div><h3>Локальный узел сбора</h3>
-        <p>Принимает данные со множества датчиков объекта и надёжно их сохраняет.</p></div>
-      <div class="card"><div class="ic">🖥️</div><h3>Платформа оператора</h3>
-        <p>Анализ в реальном времени, панель состояния, журнал событий и история.</p></div>
+    <div class="grid g4">
+      <div class="card"><div class="k">01 · Датчик</div><h3>Акселерометр</h3>
+        <p>Наша разработка. 3 оси, сотни измерений в секунду.</p></div>
+      <div class="card"><div class="k">02 · Узел</div><h3>Полевой узел</h3>
+        <p>Оцифровывает сигнал и передаёт по сети в облако.</p></div>
+      <div class="card"><div class="k">03 · Облако</div><h3>Платформа</h3>
+        <p>Приём, анализ, диагностика, тревоги и отчёты.</p></div>
+      <div class="card"><div class="k">04 · Оператор</div><h3>Экран центра</h3>
+        <p>Живые сигналы и состояние каждого объекта.</p></div>
     </div>
   </div>
 </section>
@@ -204,27 +205,64 @@
       <div class="step"><div class="n">1</div><div>
         <h3>Измерение</h3><p>Датчики непрерывно фиксируют колебания конструкции.</p></div></div>
       <div class="step"><div class="n">2</div><div>
-        <h3>Анализ</h3><p>Система рассчитывает диагностические показатели состояния объекта.</p></div></div>
+        <h3>Анализ</h3><p>Платформа считает пиковое ускорение, интенсивность и индекс состояния.</p></div></div>
       <div class="step"><div class="n">3</div><div>
-        <h3>Обнаружение отклонений</h3><p>При выходе за норму система автоматически поднимает событие.</p></div></div>
+        <h3>Тревога</h3><p>При выходе за норму система автоматически поднимает событие.</p></div></div>
       <div class="step"><div class="n">4</div><div>
-        <h3>Решение оператора</h3><p>Оператор видит событие, разбирает его и принимает решение.</p></div></div>
+        <h3>Решение</h3><p>Оператор видит событие с любого устройства и принимает решение.</p></div></div>
     </div>
   </div>
 </section>
 
-<!-- VALUE -->
-<section id="value">
+<!-- WHY -->
+<section id="why">
   <div class="wrap">
     <div class="section-head">
-      <span class="eyebrow">Ценность</span>
-      <h2>Зачем это нужно</h2>
+      <span class="eyebrow">Почему мы</span>
+      <h2>Чем TerraPulse отличается</h2>
     </div>
     <div class="grid g4">
-      <div class="val"><div class="ic">✓</div><div><b>Ранняя диагностика</b><span>Повреждения видны до того, как станут опасными.</span></div></div>
-      <div class="val"><div class="ic">✓</div><div><b>Больше безопасности</b><span>Объективный контроль состояния 24/7.</span></div></div>
-      <div class="val"><div class="ic">✓</div><div><b>Продление ресурса</b><span>Обслуживание по фактическому состоянию.</span></div></div>
-      <div class="val"><div class="ic">✓</div><div><b>Экономия</b><span>Меньше затрат на аварийные ремонты.</span></div></div>
+      <div class="val"><div class="ic">✓</div><div><b>Свои приборы, дёшево</b><span>Наши датчики в разы дешевле сейсмометров — можно покрыть весь объект.</span></div></div>
+      <div class="val"><div class="ic">✓</div><div><b>Облако, а не серверы</b><span>Клиенту не нужны серверы и IT — запуск за день, доступ отовсюду.</span></div></div>
+      <div class="val"><div class="ic">✓</div><div><b>Без привязки к поставщику</b><span>Открытые мировые стандарты — данные легко интегрировать.</span></div></div>
+      <div class="val"><div class="ic">✓</div><div><b>Специализация</b><span>Заточено под мониторинг конструкций, а не под общую сейсмологию.</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- PROTOTYPE -->
+<section id="proto" class="band">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Рабочий прототип</span>
+      <h2>Это не концепт — система уже работает</h2>
+      <p>Полевой узел на Raspberry Pi собирает два прибора и передаёт живые данные
+         в центр — с настоящей идентификацией каналов, как в промышленных системах.</p>
+    </div>
+    <div class="grid g4">
+      <div class="stat"><div class="big">200 Гц</div><div class="lab">живой поток в реальном времени</div></div>
+      <div class="stat"><div class="big">2 прибора</div><div class="lab">акселерометр + сейсмодатчик</div></div>
+      <div class="stat"><div class="big">PGA · события</div><div class="lab">интенсивность, индекс, тревоги</div></div>
+      <div class="stat"><div class="big">Облако</div><div class="lab">доступ с любого устройства</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- TEAM -->
+<section id="team">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Команда</span>
+      <h2>Инженеры полного цикла</h2>
+      <p>Редкое сочетание аппаратной, программной и научной экспертизы в одной команде.</p>
+    </div>
+    <div class="grid g3">
+      <div class="card"><div class="k">Основатель · идея</div><h3>Лутфулла Юлдашев</h3>
+        <p>Автор идеи и видения продукта, стратегия развития.</p></div>
+      <div class="card"><div class="k">Приборы и ПО</div><h3>Жасур Юлдашев</h3>
+        <p>Акселерометры, электроника, программирование, платформа.</p></div>
+      <div class="card"><div class="k">Наука</div><h3>Тимур Мамарозиков</h3>
+        <p>Сейсмо-анализ, методики и алгоритмы диагностики конструкций.</p></div>
     </div>
   </div>
 </section>
@@ -234,9 +272,9 @@
   <div class="wrap">
     <div class="scale">
       <span class="eyebrow">Масштаб</span>
-      <h2>От одного объекта до сети зданий города</h2>
-      <p>Единая система растёт вместе с задачей — от единичного датчика на мосту
-         до мониторинга целого парка сооружений.</p>
+      <h2>От одного объекта до сети зданий страны</h2>
+      <p>Облачная платформа растёт вместе с задачей — от единичного датчика на мосту
+         до мониторинга сотен сооружений по всей стране.</p>
       <a class="btn btn-primary" href="https://github.com/jasur28/terrapulse" target="_blank" rel="noopener">Смотреть проект на GitHub</a>
     </div>
   </div>
@@ -244,7 +282,7 @@
 
 <footer>
   <div class="wrap foot">
-    <div>© 2026 TerraPulse · Lutfulla&nbsp;Yuldashev, Jasur&nbsp;Yuldashev</div>
+    <div>© 2026 TerraPulse · Лутфулла Юлдашев, Жасур Юлдашев, Тимур Мамарозиков</div>
     <div class="links">
       <a href="https://github.com/jasur28/terrapulse" target="_blank" rel="noopener">GitHub</a>
       <a href="mailto:yuldashevj@gmail.com">yuldashevj@gmail.com</a>
